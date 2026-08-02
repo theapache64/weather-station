@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Is It Hot In Here? · Office Weather Station</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #fdfdfb;
+    --ink: #111111;
+    --gray: #e8e8e4;
+    --yellow: #ffd93d;
+    --red: #ff4b4b;
+    --blue: #2f6fed;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Courier New", ui-monospace, "SF Mono", Menlo, monospace;
+    font-weight: 700;
+    min-height: 100vh;
+    padding: 24px 16px 48px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  header { text-align: center; margin: 8px 0 24px; max-width: 900px; width: 100%; }
+  header h1 {
+    font-size: 2rem; text-transform: uppercase; letter-spacing: 2px;
+    border-bottom: 4px solid var(--ink); padding-bottom: 12px;
+  }
+  header p { margin-top: 10px; font-size: 0.95rem; font-style: italic; }
+
+  .neu {
+    background: #ffffff;
+    border: 3px solid var(--ink);
+    box-shadow: 8px 8px 0 var(--ink);
+    border-radius: 0;
+  }
+  .neu-inset {
+    background: var(--gray);
+    border: 3px solid var(--ink);
+    border-radius: 0;
+  }
+
+  .verdict {
+    max-width: 900px;
+    width: 100%;
+    padding: 28px 32px;
+    text-align: center;
+    margin-bottom: 32px;
+    background: var(--yellow);
+  }
+  .verdict .emoji { font-size: 3rem; display: block; margin-bottom: 10px; }
+  .verdict .line { font-size: 1.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  .verdict .sub { margin-top: 10px; font-size: 0.85rem; font-weight: 400; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 28px;
+    max-width: 900px;
+    width: 100%;
+    margin-bottom: 32px;
+  }
+  @media (max-width: 760px) {
+    .cards { grid-template-columns: repeat(2, 1fr); }
+  }
+  .card { padding: 22px 16px; text-align: center; position: relative; cursor: help; }
+  .card:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 230px;
+    padding: 10px 12px;
+    background: var(--ink);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    text-align: left;
+    border: 3px solid var(--ink);
+    box-shadow: 5px 5px 0 rgba(17,17,17,0.3);
+    z-index: 10;
+  }
+  .card .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 2px; }
+  .card .value { font-size: 2.3rem; margin-top: 10px; }
+  .card .unit { font-size: 1rem; font-weight: 400; }
+  .card.temp .value { color: var(--red); }
+  .card.hum .value { color: var(--blue); }
+
+  .chart-wrap {
+    max-width: 900px;
+    width: 100%;
+    padding: 24px;
+  }
+  .chart-wrap h2 {
+    font-size: 1rem; text-transform: uppercase; letter-spacing: 2px;
+    margin-bottom: 6px; text-align: center;
+  }
+  .chart-wrap .hint { font-size: 0.72rem; font-weight: 400; text-align: center; margin-bottom: 16px; }
+  .chart-inner { padding: 16px; }
+  canvas { width: 100% !important; }
+  #countdown {
+    margin: 16px auto 0; width: fit-content;
+    font-size: 0.8rem; padding: 6px 14px;
+    border: 3px solid var(--ink); background: var(--yellow);
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+
+  .bottom-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 28px;
+    max-width: 900px;
+    width: 100%;
+    margin-top: 32px;
+  }
+  .panel { padding: 22px; }
+  .panel h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: 2px; text-align: center; }
+  .panel .hint { font-size: 0.72rem; font-weight: 400; text-align: center; margin: 6px 0 16px; }
+  #records { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  #records td { border: 2px solid var(--ink); padding: 8px 10px; }
+  #records td:last-child { text-align: right; font-weight: 700; }
+  .streak {
+    margin-top: 16px; padding: 10px; text-align: center;
+    border: 3px solid var(--ink); background: var(--gray);
+    font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px;
+  }
+  #heatmap { display: grid; gap: 3px; }
+  #heatmap .hm-row { display: grid; grid-template-columns: 44px repeat(7, 1fr); gap: 3px; align-items: stretch; }
+  #heatmap .hm-label { font-size: 0.65rem; font-weight: 400; align-self: center; }
+  #heatmap .hm-cell { border: 2px solid var(--ink); min-height: 18px; }
+  #heatmap .hm-cell.empty { border-color: rgba(17,17,17,0.15); background: transparent; }
+  #heatmap .hm-head { font-size: 0.6rem; font-weight: 700; text-align: center; border: none; min-height: auto; }
+
+  footer { margin-top: 32px; font-size: 0.75rem; font-weight: 400; text-align: center; }
+  footer a { color: var(--ink); }
+
+  #status {
+    font-size: 0.8rem; margin-bottom: 24px; padding: 6px 14px;
+    border: 3px solid var(--ink); background: #ffffff;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .error { background: var(--red); color: #fff; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🌡️ Is It Hot In Here?</h1>
+  <p>…or is it just you? The official office weather truth machine.</p>
+</header>
+
+<div id="status">Consulting the sensor…</div>
+
+<div class="verdict neu" id="verdict" style="display:none">
+  <span class="emoji" id="v-emoji">🤔</span>
+  <div class="line" id="v-line"></div>
+  <div class="sub" id="v-sub"></div>
+</div>
+
+<div class="cards" id="cards" style="display:none">
+  <div class="card neu temp" data-tip="How hot the air is right now, straight from the sensor in the corner.">
+    <div class="label">Temperature</div>
+    <div class="value"><span id="c-temp">–</span><span class="unit"> °C</span></div>
+  </div>
+  <div class="card neu hum" data-tip="How much moisture is in the air. Higher = stickier. Above ~60% your sweat stops working.">
+    <div class="label">Humidity</div>
+    <div class="value"><span id="c-hum">–</span><span class="unit"> %</span></div>
+  </div>
+  <div class="card neu" id="card-score" data-tip="Heat + humidity squashed into one 'how bad does it feel' number. 0 = paradise.">
+    <div class="label">Discomfort Score</div>
+    <div class="value"><span id="c-score">–</span></div>
+  </div>
+  <div class="card neu" id="card-valid" data-tip="How much of today was genuinely uncomfortable.">
+    <div class="label">Complaint Validity</div>
+    <div class="value"><span id="c-valid">–</span><span class="unit"> %</span></div>
+  </div>
+</div>
+
+<div class="chart-wrap neu" id="chartbox" style="display:none">
+  <h2>Discomfort history &amp; forecast</h2>
+  <div class="hint">dashed part = crystal ball 🔮 — what it usually feels like at this hour, averaged over the last 7 days</div>
+  <div class="chart-inner neu-inset">
+    <canvas id="chart" height="300"></canvas>
+  </div>
+  <div id="countdown">📡 …</div>
+</div>
+
+<div class="bottom-grid" id="extras" style="display:none">
+  <div class="panel neu">
+    <h2>🔥 Hall of Shame</h2>
+    <div class="hint">all-time office records — never forget</div>
+    <table id="records">
+      <tr><td>Hottest moment</td><td id="r-temp">–</td></tr>
+      <tr><td>Swampiest moment</td><td id="r-hum">–</td></tr>
+      <tr><td>Peak suffering</td><td id="r-score">–</td></tr>
+    </table>
+    <div class="streak" id="streak">–</div>
+  </div>
+  <div class="panel neu">
+    <h2>🗓️ Suffering Heatmap</h2>
+    <div class="hint">avg discomfort by hour, last 7 days — spot the daily hell hour</div>
+    <div id="heatmap"></div>
+  </div>
+</div>
+
+<footer>
+  Powered by one very dedicated ESP32 + DHT22 in the corner of the office.<br>
+  Data refreshes every 60s ·
+  <a href="https://docs.google.com/spreadsheets/d/1nO-hcNX2naH7hCS0WbRd7r907SvisjhD96I8R1Wx1Fs" target="_blank">raw data</a>
+</footer>
+
+<script>
+const SHEET_ID = "1nO-hcNX2naH7hCS0WbRd7r907SvisjhD96I8R1Wx1Fs";
+const DATA_URL   = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=514970007`;
+const CONFIG_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=awc_config`;
+
+const HISTORY_POINTS = 60;   // points shown on the chart
+const FORECAST_POINTS = 10;  // predicted points appended
+
+let chart = null;
+let nextPingAt = null; // when the ESP32 should report in next
+
+// --- tiny CSV parser (handles quoted fields) ---
+function parseCsv(text) {
+  return text.trim().split("\n").map(line => {
+    const out = [];
+    let cur = "", inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') inQ = !inQ;
+      else if (ch === "," && !inQ) { out.push(cur); cur = ""; }
+      else cur += ch;
+    }
+    out.push(cur);
+    return out;
+  });
+}
+
+// Timestamps come as "M/D/YYYY H:MM:SS"
+function parseTimestamp(s) {
+  const [d, t] = s.split(" ");
+  if (!d || !t) return null;
+  const [M, D, Y] = d.split("/").map(Number);
+  const [h, m, sec] = t.split(":").map(Number);
+  return new Date(Y, M - 1, D, h, m, sec || 0);
+}
+
+function fmtTime(date) {
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+// fallback while history is thin: trend of the *recent* readings, with the slope
+// fading out over the horizon so it settles instead of extrapolating into a nosedive
+function trend(values, n) {
+  const w = values.length;
+  const lastV = values[w - 1] ?? 0;
+  if (w < 3) return Array(n).fill(lastV);
+  let sx = 0, sy = 0, sxy = 0, sxx = 0;
+  values.forEach((y, x) => { sx += x; sy += y; sxy += x * y; sxx += x * x; });
+  let slope = (w * sxy - sx * sy) / (w * sxx - sx * sx || 1);
+  const out = [];
+  let v = lastV;
+  for (let i = 0; i < n; i++) {
+    slope *= 0.8; // each step trusts the trend less
+    v += slope;
+    out.push(v);
+  }
+  return out;
+}
+
+// crystal ball: for each future time, average the readings taken at that same
+// time of day (±20 min) on previous days within the 7-day window
+function forecast(week, key, futureTimes, min = -Infinity, max = Infinity) {
+  const TOL = 20 * 60 * 1000;
+  const DAY = 24 * 3600 * 1000;
+  const tod = d =>
+    d.getHours() * 3600000 + d.getMinutes() * 60000 + d.getSeconds() * 1000;
+  // no same-time-of-day history yet? predict from the last hour of readings,
+  // not the whole day (a morning spike would otherwise drag the trend down)
+  const newest = week[week.length - 1]?.t.getTime() ?? 0;
+  const recent = week.filter(d => newest - d.t.getTime() <= 3600000);
+  const trained = recent.length >= 3 ? recent : week;
+  const fallback = trend(trained.map(d => d[key]), futureTimes.length);
+
+  return futureTimes.map((t, i) => {
+    const dayStart = new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime();
+    const samples = week.filter(d => {
+      if (d.t.getTime() >= dayStart) return false; // previous days only
+      let diff = Math.abs(tod(d.t) - tod(t));
+      diff = Math.min(diff, DAY - diff); // wrap around midnight
+      return diff <= TOL;
+    });
+    const raw = samples.length
+      ? samples.reduce((s, d) => s + d[key], 0) / samples.length
+      : fallback[i];
+    return +Math.min(max, Math.max(min, raw)).toFixed(2);
+  });
+}
+
+function thresholds(cfg) {
+  const hour = new Date().getHours();
+  const night = hour >= 21 || hour < 7;
+  return {
+    low:  parseFloat(cfg[night ? "ac_off_score_night" : "ac_off_score_day"]) || 13,
+    high: parseFloat(cfg[night ? "ac_on_score_night"  : "ac_on_score_day"])  || 38,
+  };
+}
+
+function pickVerdict(score, temp, hum, cfg) {
+  const { low, high } = thresholds(cfg);
+  const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+  if (score < low) {
+    const ratio = low > 0 ? score / low : 1; // how close we are to the "complain" line
+    if (ratio < 0.5) {
+      return { emoji: pick(["😌", "🧊", "🍃"]),
+        line: pick([
+          "It's just you. The office is objectively fine.",
+          "Scientifically speaking: it's you.",
+          "The air is innocent. Maybe grab some water?" ]),
+        sub: `Score ${score} — well below the “complain” threshold of ${low}. Zero sympathy.` };
+    }
+    if (ratio < 0.85) {
+      return { emoji: pick(["🙂", "🌥️", "👍"]),
+        line: pick([
+          "Still fine. Your complaints are premature.",
+          "Comfortable-ish. The office is behaving.",
+          "It's you. But we see where you're coming from." ]),
+        sub: `Score ${score} — under the “complain” threshold of ${low}, but not by miles.` };
+    }
+    return { emoji: pick(["😐", "🤏", "⏳"]),
+      line: pick([
+        "Technically fine. TECHNICALLY.",
+        "It's just you… for now.",
+        "Not hot yet. Emphasis on yet." ]),
+      sub: `Score ${score} — a whisker from the “complain” threshold of ${low}. Borderline.` };
+  }
+
+  if (score < high) {
+    const p = (score - low) / Math.max(high - low, 0.01); // position inside the debatable zone
+    const sub = p < 0.33
+      ? `Score ${score} — just over the “complain” line of ${low}. Mild grumbling permitted.`
+      : p < 0.66
+        ? `Score ${score} — squarely in the debatable zone (${low}–${high}).`
+        : `Score ${score} — creeping up on “officially hot” at ${high}. Brace yourselves.`;
+    return { emoji: pick(["🫠", "🌤️", "😅"]),
+      line: pick([
+        "It's getting toasty… you're not imagining it.",
+        "Warm-ish. Your complaints are 60% valid.",
+        "Not hot hot. But your laptop fan agrees with you." ]),
+      sub };
+  }
+
+  const over = high > 0 ? score / high : 1;
+  return { emoji: pick(["🥵", "🔥", "🌋"]),
+    line: pick([
+      "It's NOT just you. It is genuinely hot in here.",
+      "Confirmed: the office is cooking. You are the roast.",
+      "Hot. Officially. Feel free to point at this screen." ]),
+    sub: over < 1.2
+      ? `Score ${score} — past the “officially hot” threshold of ${high}. Someone do something.`
+      : `Score ${score} — ${Math.round((over - 1) * 100)}% beyond “officially hot” (${high}). This is fine. 🔥` };
+}
+
+function render(rows, cfg) {
+  // rows: [Timestamp, temperature, humidity, score, note]
+  const data = rows
+    .map(r => ({ t: parseTimestamp(r[0]), temp: +r[1], hum: +r[2], score: +r[3] }))
+    .filter(r => r.t && !isNaN(r.temp));
+  if (!data.length) throw new Error("no data rows");
+
+  const last = data[data.length - 1];
+  document.getElementById("c-temp").textContent = last.temp.toFixed(1);
+  document.getElementById("c-hum").textContent = last.hum.toFixed(0);
+  document.getElementById("c-score").textContent = last.score.toFixed(1);
+
+  const { low: tipLow, high: tipHigh } = thresholds(cfg);
+  document.getElementById("card-score").dataset.tip =
+    `Heat + humidity squashed into one "how bad does it feel" number. ` +
+    `Under ${tipLow}: it's fine. ${tipLow}–${tipHigh}: warm, complaints debatable. ` +
+    `Over ${tipHigh}: officially hot, complain freely.`;
+
+  const v = pickVerdict(last.score, last.temp, last.hum, cfg);
+  document.getElementById("v-emoji").textContent = v.emoji;
+  document.getElementById("v-line").textContent = v.line;
+  document.getElementById("v-sub").textContent = v.sub;
+
+  // firmware sleeps `sleep_time_in_minutes` between readings (default 30, same as main.cpp)
+  const sleepMin = parseInt(cfg["sleep_time_in_minutes"]) > 0
+    ? parseInt(cfg["sleep_time_in_minutes"]) : 30;
+  nextPingAt = last.t.getTime() + sleepMin * 60000;
+
+  const ago = Math.round((Date.now() - last.t.getTime()) / 60000);
+  document.getElementById("status").textContent =
+    `Last reading ${ago <= 1 ? "just now" : ago + " min ago"} (${fmtTime(last.t)})`;
+
+  document.getElementById("verdict").style.display = "";
+  document.getElementById("cards").style.display = "";
+  document.getElementById("chartbox").style.display = "";
+
+  // --- chart ---
+  const hist = data.slice(-HISTORY_POINTS);
+
+  // median interval between readings, used to space forecast points
+  const gaps = [];
+  for (let i = 1; i < hist.length; i++) gaps.push(hist[i].t - hist[i - 1].t);
+  gaps.sort((a, b) => a - b);
+  const step = gaps[Math.floor(gaps.length / 2)] || 60000;
+
+  const futureTimes = Array.from({ length: FORECAST_POINTS },
+    (_, i) => new Date(last.t.getTime() + step * (i + 1)));
+
+  // predictions: same-time-of-day average over the last 7 days
+  const weekAgo = last.t.getTime() - 7 * 24 * 3600 * 1000;
+  const week = data.filter(d => d.t.getTime() >= weekAgo);
+  const predScore = forecast(week, "score", futureTimes, 0);
+  const predTemp  = forecast(week, "temp",  futureTimes);
+  const predHum   = forecast(week, "hum",   futureTimes, 0, 100);
+
+  const labels = [...hist.map(d => fmtTime(d.t)), ...futureTimes.map(fmtTime)];
+
+  // yesterday's score at the same time of day, for the whole chart range (history + forecast)
+  const DAY = 24 * 3600 * 1000;
+  const Y_TOL = 10 * 60 * 1000;
+  let yi = 0; // data is chronological, so walk it once with a moving pointer
+  const yesterdayScores = [...hist.map(d => d.t), ...futureTimes].map(t => {
+    const target = t.getTime() - DAY;
+    while (yi < data.length && data[yi].t.getTime() < target) yi++;
+    const best = [data[yi - 1], data[yi]].filter(Boolean).sort((a, b) =>
+      Math.abs(a.t.getTime() - target) - Math.abs(b.t.getTime() - target))[0];
+    return best && Math.abs(best.t.getTime() - target) <= Y_TOL ? best.score : null;
+  });
+  const hasYesterday = yesterdayScores.some(v => v !== null);
+
+  const n = hist.length;
+  const histPart = vals => [...vals, ...Array(FORECAST_POINTS).fill(null)];
+  const predPart = (vals, preds) =>
+    [...Array(n - 1).fill(null), vals[n - 1], ...preds];
+
+  const scores = hist.map(d => d.score);
+  const temps  = hist.map(d => d.temp);
+  const hums   = hist.map(d => d.hum);
+
+  const line = (label, data, color, extra) => ({
+    label, data, borderColor: color,
+    cubicInterpolationMode: "monotone", tension: 0.4, pointRadius: 0, ...extra,
+  });
+  const crystal = (data, color, extra) => line("🔮", data, color, {
+    borderDash: [6, 6], borderWidth: 2, ...extra,
+  });
+
+  Chart.defaults.font.family = '"Courier New", ui-monospace, monospace';
+  Chart.defaults.font.weight = "bold";
+
+  const cfgChart = {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        // score is the star of the show
+        line("Discomfort score", histPart(scores), "#ff4b4b", {
+          backgroundColor: "rgba(255,75,75,0.15)", fill: true, borderWidth: 4,
+        }),
+        crystal(predPart(scores, predScore), "#ff4b4b", {
+          backgroundColor: "rgba(255,75,75,0.06)", fill: true, borderWidth: 3,
+        }),
+        ...(hasYesterday ? [line("Yesterday's score", yesterdayScores, "#8a8a8a", {
+          borderDash: [2, 5], borderWidth: 2,
+        })] : []),
+        line("Temperature °C", histPart(temps), "#111111", { borderWidth: 2, yAxisID: "y1" }),
+        crystal(predPart(temps, predTemp), "#111111", { yAxisID: "y1" }),
+        line("Humidity %", histPart(hums), "#2f6fed", { borderWidth: 2, yAxisID: "y1" }),
+        crystal(predPart(hums, predHum), "#2f6fed", { yAxisID: "y1" }),
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: {
+          labels: {
+            color: "#111111", usePointStyle: false, boxWidth: 14, boxHeight: 14,
+            filter: item => item.text !== "🔮", // dashed twins share their solid line's legend
+          },
+        },
+      },
+      scales: {
+        x: { ticks: { color: "#111111", maxTicksLimit: 10 }, grid: { display: false } },
+        y: { min: 0, max: 60, ticks: { color: "#ff4b4b" }, grid: { color: "rgba(17,17,17,0.12)" } },
+        y1: { min: 0, max: 60, position: "right", ticks: { color: "#111111" }, grid: { display: false } },
+      },
+    },
+  };
+
+  if (chart) { chart.data = cfgChart.data; chart.update(); }
+  else chart = new Chart(document.getElementById("chart"), cfgChart);
+}
+
+// run a gviz query-language query against the data tab; Google computes it server-side
+async function qRaw(query) {
+  const res = await fetch(DATA_URL + "&tq=" + encodeURIComponent(query));
+  return parseCsv(await res.text());
+}
+const q = query => qRaw(query).then(rows => rows.slice(1)); // drop header
+
+const qDatetime = d =>
+  `datetime '${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-` +
+  `${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:` +
+  `${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}'`;
+
+// columns: A=Timestamp B=temperature C=humidity D=score
+async function loadExtras(cfg) {
+  const { low, high } = thresholds(cfg);
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+
+  const [hot, swamp, peak, todayAll, todayValid, lastHot, heat] = await Promise.all([
+    q("select A, B order by B desc limit 1"),
+    q("select A, C order by C desc limit 1"),
+    q("select A, D order by D desc limit 1"),
+    q(`select count(D) where A >= ${qDatetime(todayStart)}`),
+    q(`select count(D) where A >= ${qDatetime(todayStart)} and D >= ${low}`),
+    q(`select A where D >= ${high} order by A desc limit 1`),
+    qRaw(`select hour(A), avg(D) where A >= ${qDatetime(weekAgo)} group by hour(A) pivot toDate(A)`),
+  ]);
+
+  const when = s => {
+    const d = parseTimestamp(s);
+    return d ? `${d.getMonth() + 1}/${d.getDate()} ${fmtTime(d)}` : "?";
+  };
+  const rec = (id, row, unit) => {
+    if (row[0]) document.getElementById(id).textContent =
+      `${(+row[0][1]).toFixed(1)}${unit} · ${when(row[0][0])}`;
+  };
+  rec("r-temp", hot, "°C");
+  rec("r-hum", swamp, "%");
+  rec("r-score", peak, " pts");
+
+  // complaint validity: share of today's readings above the "complain" threshold
+  const total = +(todayAll[0]?.[0] ?? 0);
+  const valid = +(todayValid[0]?.[0] ?? 0);
+  const validPct = total ? Math.round((valid / total) * 100) : null;
+  document.getElementById("c-valid").textContent = validPct ?? "–";
+  document.getElementById("card-valid").dataset.tip =
+    `Of today's ${total} readings, ${valid} scored over ${low} — the "worth complaining" line. ` +
+    `So ${validPct ?? 0}% of today was genuinely uncomfortable. The rest was just vibes.`;
+
+  // streak: days since it was last officially hot
+  const streakEl = document.getElementById("streak");
+  if (!lastHot[0] || !lastHot[0][0]) {
+    streakEl.textContent = "🎉 never been officially hot. suspicious.";
+  } else {
+    const days = Math.floor((Date.now() - parseTimestamp(lastHot[0][0])) / 86400000);
+    streakEl.textContent = days === 0
+      ? "🔥 officially hot TODAY. it's not just you."
+      : `✅ ${days} day${days === 1 ? "" : "s"} since it was officially hot`;
+  }
+
+  renderHeatmap(heat, low, high);
+  document.getElementById("extras").style.display = "";
+}
+
+function renderHeatmap(table, low, high) {
+  // pivoted CSV: header = ["hour(Timestamp)", "2026-8-1", "2026-8-2", ...], rows = [hour, avg, avg, ...]
+  const el = document.getElementById("heatmap");
+  el.innerHTML = "";
+  if (table.length < 2) return;
+
+  const days = table[0].slice(1).map(s => {
+    const [Y, M, D] = s.split("-").map(Number);
+    return new Date(Y, M - 1, D);
+  });
+  const nDates = days.length;
+  const rows = table.slice(1);
+
+  const head = document.createElement("div");
+  head.className = "hm-row";
+  head.innerHTML = `<div class="hm-label"></div>` + days.map(d =>
+    `<div class="hm-cell hm-head">${d.toLocaleDateString([], { weekday: "short" })}</div>`
+  ).join("") + `<div class="hm-cell hm-head empty"></div>`.repeat(7 - nDates);
+  el.appendChild(head);
+
+  const color = v =>
+    v >= high ? "var(--red)" : v >= low ? "var(--yellow)" : "#6bcb77";
+
+  rows.sort((a, b) => +a[0] - +b[0]).forEach(r => {
+    const row = document.createElement("div");
+    row.className = "hm-row";
+    let html = `<div class="hm-label">${String(r[0]).padStart(2, "0")}:00</div>`;
+    for (let i = 1; i <= 7; i++) {
+      const v = r[i];
+      html += (v === undefined || v === "")
+        ? `<div class="hm-cell empty"></div>`
+        : `<div class="hm-cell" style="background:${color(+v)}" title="avg score ${(+v).toFixed(1)}"></div>`;
+    }
+    row.innerHTML = html;
+    el.appendChild(row);
+  });
+}
+
+async function refresh() {
+  try {
+    const [dataRes, cfgRes] = await Promise.all([fetch(DATA_URL), fetch(CONFIG_URL)]);
+    const rows = parseCsv(await dataRes.text()).slice(1); // drop header
+    const cfg = Object.fromEntries(parseCsv(await cfgRes.text()).slice(1));
+    render(rows, cfg);
+    loadExtras(cfg).catch(console.error); // extras are non-critical, don't block the main view
+  } catch (e) {
+    const el = document.getElementById("status");
+    el.textContent = "Couldn't reach the sensor data 😢 (" + e.message + ")";
+    el.className = "error";
+  }
+}
+
+// countdown to the sensor's next scheduled report
+setInterval(() => {
+  if (!nextPingAt) return;
+  const el = document.getElementById("countdown");
+  const s = Math.round((nextPingAt - Date.now()) / 1000);
+  if (s > 0) {
+    const mm = String(Math.floor(s / 60)).padStart(2, "0");
+    const ss = String(s % 60).padStart(2, "0");
+    el.textContent = `📡 next reading in ${mm}:${ss}`;
+  } else {
+    el.textContent = "📡 next reading: any second now… 👀";
+  }
+}, 1000);
+
+refresh();
+setInterval(refresh, 60000);
+</script>
+</body>
+</html>
