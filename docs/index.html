@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Is It Hot In Here? · Office Weather Station</title>
+<title>Weather Station · hot? cold? or is it just you?</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <style>
   :root {
@@ -51,8 +51,10 @@
     padding: 28px 32px;
     text-align: center;
     margin-bottom: 32px;
-    background: var(--yellow);
+    background: #d3f9d8; /* fine by default */
   }
+  .verdict.warm, .verdict.hot { background: var(--yellow); }
+  .verdict.chilly, .verdict.cold { background: #cfe8ff; }
   .verdict .emoji { font-size: 3rem; display: block; margin-bottom: 10px; }
   .verdict .line { font-size: 1.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
   .verdict .sub { margin-top: 10px; font-size: 0.85rem; font-weight: 400; }
@@ -153,8 +155,8 @@
 <body>
 
 <header>
-  <h1>🌡️ Is It Hot In Here?</h1>
-  <p>…or is it just you? The official office weather truth machine.</p>
+  <h1>⛅ The Weather In Here</h1>
+  <p>hot? cold? or is it just you? — the official indoor weather truth machine.</p>
 </header>
 
 <div id="status">Consulting the sensor…</div>
@@ -195,24 +197,25 @@
 
 <div class="bottom-grid" id="extras" style="display:none">
   <div class="panel neu">
-    <h2>🔥 Hall of Shame</h2>
-    <div class="hint">all-time office records — never forget</div>
+    <h2>🏆 Hall of Extremes</h2>
+    <div class="hint">all-time records in here — never forget</div>
     <table id="records">
-      <tr><td>Hottest moment</td><td id="r-temp">–</td></tr>
-      <tr><td>Swampiest moment</td><td id="r-hum">–</td></tr>
-      <tr><td>Peak suffering</td><td id="r-score">–</td></tr>
+      <tr><td>Hottest moment 🔥</td><td id="r-temp">–</td></tr>
+      <tr><td>Coldest moment 🧊</td><td id="r-cold">–</td></tr>
+      <tr><td>Swampiest moment 💧</td><td id="r-hum">–</td></tr>
+      <tr><td>Peak suffering 🫠</td><td id="r-score">–</td></tr>
     </table>
     <div class="streak" id="streak">–</div>
   </div>
   <div class="panel neu">
-    <h2>🗓️ Suffering Heatmap</h2>
-    <div class="hint">avg discomfort by hour, last 7 days — spot the daily hell hour</div>
+    <h2>🗓️ Climate Map</h2>
+    <div class="hint">hour by hour, last 7 days — 🟦 fridge · 🟩 fine · 🟨 warm · 🟥 sauna</div>
     <div id="heatmap"></div>
   </div>
 </div>
 
 <footer>
-  Powered by one very dedicated ESP32 + DHT22 in the corner of the office.<br>
+  Powered by one very dedicated ESP32 + DHT22 in a corner somewhere.<br>
   Data refreshes every 60s ·
   <a href="https://docs.google.com/spreadsheets/d/1nO-hcNX2naH7hCS0WbRd7r907SvisjhD96I8R1Wx1Fs" target="_blank">raw data</a>
 </footer>
@@ -307,35 +310,58 @@ function forecast(week, key, futureTimes, min = -Infinity, max = Infinity) {
 function thresholds(cfg) {
   const hour = new Date().getHours();
   const night = hour >= 21 || hour < 7;
+  const comfort = parseFloat(cfg["comfort_temperature"]) || 23;
   return {
     low:  parseFloat(cfg[night ? "ac_off_score_night" : "ac_off_score_day"]) || 13,
     high: parseFloat(cfg[night ? "ac_on_score_night"  : "ac_on_score_day"])  || 38,
+    comfort,
+    // cold side: overridable via optional config keys, else derived from comfort temp
+    chillyAt: parseFloat(cfg["chilly_temperature"]) || comfort - 3,
+    coldAt:   parseFloat(cfg["cold_temperature"])   || comfort - 6,
   };
 }
 
 function pickVerdict(score, temp, hum, cfg) {
-  const { low, high } = thresholds(cfg);
+  const { low, high, comfort, chillyAt, coldAt } = thresholds(cfg);
   const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+  // cold is judged by temperature — the firmware's score only measures heat
+  if (temp <= coldAt) {
+    return { mood: "cold", emoji: pick(["🥶", "🐧", "🧊"]),
+      line: pick([
+        "It's NOT just you. It is genuinely cold in here.",
+        "Officially a fridge. Certified penguin weather.",
+        "Cold. Officially. The AC has won." ]),
+      sub: `${temp.toFixed(1)}°C — at or below the “officially cold” line of ${coldAt}°C. Jackets are valid.` };
+  }
+  if (temp <= chillyAt) {
+    return { mood: "chilly", emoji: pick(["🧥", "🍦", "😬"]),
+      line: pick([
+        "Bit nippy. Sleeves down.",
+        "Chilly. Cold complaints are valid-ish.",
+        "Not freezing. But your fingers disagree." ]),
+      sub: `${temp.toFixed(1)}°C — below the “chilly” line of ${chillyAt}°C (comfort is ${comfort}°C).` };
+  }
 
   if (score < low) {
     const ratio = low > 0 ? score / low : 1; // how close we are to the "complain" line
     if (ratio < 0.5) {
-      return { emoji: pick(["😌", "🧊", "🍃"]),
+      return { mood: "fine", emoji: pick(["😌", "⛅", "🍃"]),
         line: pick([
-          "It's just you. The office is objectively fine.",
-          "Scientifically speaking: it's you.",
+          "Weather report: perfect. No complaints accepted.",
+          "It's just you. The room is objectively fine.",
           "The air is innocent. Maybe grab some water?" ]),
         sub: `Score ${score} — well below the “complain” threshold of ${low}. Zero sympathy.` };
     }
     if (ratio < 0.85) {
-      return { emoji: pick(["🙂", "🌥️", "👍"]),
+      return { mood: "fine", emoji: pick(["🙂", "🌥️", "👍"]),
         line: pick([
           "Still fine. Your complaints are premature.",
-          "Comfortable-ish. The office is behaving.",
+          "Comfortable-ish. The room is behaving.",
           "It's you. But we see where you're coming from." ]),
         sub: `Score ${score} — under the “complain” threshold of ${low}, but not by miles.` };
     }
-    return { emoji: pick(["😐", "🤏", "⏳"]),
+    return { mood: "warm", emoji: pick(["😐", "🤏", "⏳"]),
       line: pick([
         "Technically fine. TECHNICALLY.",
         "It's just you… for now.",
@@ -350,7 +376,7 @@ function pickVerdict(score, temp, hum, cfg) {
       : p < 0.66
         ? `Score ${score} — squarely in the debatable zone (${low}–${high}).`
         : `Score ${score} — creeping up on “officially hot” at ${high}. Brace yourselves.`;
-    return { emoji: pick(["🫠", "🌤️", "😅"]),
+    return { mood: "warm", emoji: pick(["🫠", "🌤️", "😅"]),
       line: pick([
         "It's getting toasty… you're not imagining it.",
         "Warm-ish. Your complaints are 60% valid.",
@@ -359,10 +385,10 @@ function pickVerdict(score, temp, hum, cfg) {
   }
 
   const over = high > 0 ? score / high : 1;
-  return { emoji: pick(["🥵", "🔥", "🌋"]),
+  return { mood: "hot", emoji: pick(["🥵", "🔥", "🌋"]),
     line: pick([
       "It's NOT just you. It is genuinely hot in here.",
-      "Confirmed: the office is cooking. You are the roast.",
+      "Confirmed: this place is cooking. You are the roast.",
       "Hot. Officially. Feel free to point at this screen." ]),
     sub: over < 1.2
       ? `Score ${score} — past the “officially hot” threshold of ${high}. Someone do something.`
@@ -385,9 +411,10 @@ function render(rows, cfg) {
   document.getElementById("card-score").dataset.tip =
     `Heat + humidity squashed into one "how bad does it feel" number. ` +
     `Under ${tipLow}: it's fine. ${tipLow}–${tipHigh}: warm, complaints debatable. ` +
-    `Over ${tipHigh}: officially hot, complain freely.`;
+    `Over ${tipHigh}: officially hot. (Cold is judged separately, by temperature.)`;
 
   const v = pickVerdict(last.score, last.temp, last.hum, cfg);
+  document.getElementById("verdict").className = "verdict neu " + (v.mood || "fine");
   document.getElementById("v-emoji").textContent = v.emoji;
   document.getElementById("v-line").textContent = v.line;
   document.getElementById("v-sub").textContent = v.sub;
@@ -529,18 +556,21 @@ const qDatetime = d =>
 
 // columns: A=Timestamp B=temperature C=humidity D=score
 async function loadExtras(cfg) {
-  const { low, high } = thresholds(cfg);
+  const { low, high, chillyAt, coldAt } = thresholds(cfg);
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
   const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
 
-  const [hot, swamp, peak, todayAll, todayValid, lastHot, heat] = await Promise.all([
+  const [hot, cold, swamp, peak, todayAll, todayValid, lastHot, lastCold, heat, heatTemp] = await Promise.all([
     q("select A, B order by B desc limit 1"),
+    q("select A, B order by B asc limit 1"),
     q("select A, C order by C desc limit 1"),
     q("select A, D order by D desc limit 1"),
     q(`select count(D) where A >= ${qDatetime(todayStart)}`),
-    q(`select count(D) where A >= ${qDatetime(todayStart)} and D >= ${low}`),
+    q(`select count(D) where A >= ${qDatetime(todayStart)} and (D >= ${low} or B <= ${chillyAt})`),
     q(`select A where D >= ${high} order by A desc limit 1`),
+    q(`select A where B <= ${coldAt} order by A desc limit 1`),
     qRaw(`select hour(A), avg(D) where A >= ${qDatetime(weekAgo)} group by hour(A) pivot toDate(A)`),
+    qRaw(`select hour(A), avg(B) where A >= ${qDatetime(weekAgo)} group by hour(A) pivot toDate(A)`),
   ]);
 
   const when = s => {
@@ -552,38 +582,42 @@ async function loadExtras(cfg) {
       `${(+row[0][1]).toFixed(1)}${unit} · ${when(row[0][0])}`;
   };
   rec("r-temp", hot, "°C");
+  rec("r-cold", cold, "°C");
   rec("r-hum", swamp, "%");
   rec("r-score", peak, " pts");
 
-  // complaint validity: share of today's readings above the "complain" threshold
+  // complaint validity: share of today's readings outside the comfort zone (too hot OR too cold)
   const total = +(todayAll[0]?.[0] ?? 0);
   const valid = +(todayValid[0]?.[0] ?? 0);
   const validPct = total ? Math.round((valid / total) * 100) : null;
   document.getElementById("c-valid").textContent = validPct ?? "–";
   document.getElementById("card-valid").dataset.tip =
-    `Of today's ${total} readings, ${valid} scored over ${low} — the "worth complaining" line. ` +
+    `Of today's ${total} readings, ${valid} were outside the comfort zone — ` +
+    `too hot (score over ${low}) or too cold (under ${chillyAt}°C). ` +
     `So ${validPct ?? 0}% of today was genuinely uncomfortable. The rest was just vibes.`;
 
-  // streak: days since it was last officially hot
-  const streakEl = document.getElementById("streak");
-  if (!lastHot[0] || !lastHot[0][0]) {
-    streakEl.textContent = "🎉 never been officially hot. suspicious.";
-  } else {
-    const days = Math.floor((Date.now() - parseTimestamp(lastHot[0][0])) / 86400000);
-    streakEl.textContent = days === 0
-      ? "🔥 officially hot TODAY. it's not just you."
-      : `✅ ${days} day${days === 1 ? "" : "s"} since it was officially hot`;
-  }
+  // streaks: days since each kind of officially-bad weather
+  const since = (row, emoji, word) => {
+    if (!row[0] || !row[0][0]) return `${emoji} never officially ${word}`;
+    const days = Math.floor((Date.now() - parseTimestamp(row[0][0])) / 86400000);
+    return days === 0 ? `${emoji} officially ${word} TODAY`
+      : `${emoji} ${days} day${days === 1 ? "" : "s"} since officially ${word}`;
+  };
+  document.getElementById("streak").textContent =
+    `${since(lastHot, "🔥", "hot")} · ${since(lastCold, "🧊", "cold")}`;
 
-  renderHeatmap(heat, low, high);
+  renderHeatmap(heat, heatTemp, low, high, chillyAt);
   document.getElementById("extras").style.display = "";
 }
 
-function renderHeatmap(table, low, high) {
+function renderHeatmap(table, tempTable, low, high, chillyAt) {
   // pivoted CSV: header = ["hour(Timestamp)", "2026-8-1", "2026-8-2", ...], rows = [hour, avg, avg, ...]
   const el = document.getElementById("heatmap");
   el.innerHTML = "";
   if (table.length < 2) return;
+
+  // avg temperature per hour/day, keyed by hour — used to paint cold hours blue
+  const tempByHour = Object.fromEntries(tempTable.slice(1).map(r => [r[0], r]));
 
   const days = table[0].slice(1).map(s => {
     const [Y, M, D] = s.split("-").map(Number);
@@ -599,8 +633,9 @@ function renderHeatmap(table, low, high) {
   ).join("") + `<div class="hm-cell hm-head empty"></div>`.repeat(7 - nDates);
   el.appendChild(head);
 
-  const color = v =>
-    v >= high ? "var(--red)" : v >= low ? "var(--yellow)" : "#6bcb77";
+  const color = (score, temp) =>
+    temp !== null && temp <= chillyAt ? "#74c0fc"
+      : score >= high ? "var(--red)" : score >= low ? "var(--yellow)" : "#6bcb77";
 
   rows.sort((a, b) => +a[0] - +b[0]).forEach(r => {
     const row = document.createElement("div");
@@ -608,9 +643,12 @@ function renderHeatmap(table, low, high) {
     let html = `<div class="hm-label">${String(r[0]).padStart(2, "0")}:00</div>`;
     for (let i = 1; i <= 7; i++) {
       const v = r[i];
+      const tv = tempByHour[r[0]]?.[i];
+      const temp = (tv === undefined || tv === "") ? null : +tv;
       html += (v === undefined || v === "")
         ? `<div class="hm-cell empty"></div>`
-        : `<div class="hm-cell" style="background:${color(+v)}" title="avg score ${(+v).toFixed(1)}"></div>`;
+        : `<div class="hm-cell" style="background:${color(+v, temp)}"` +
+          ` title="avg score ${(+v).toFixed(1)}${temp !== null ? `, avg temp ${temp.toFixed(1)}°C` : ""}"></div>`;
     }
     row.innerHTML = html;
     el.appendChild(row);
