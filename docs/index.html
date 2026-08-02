@@ -222,8 +222,7 @@ const SHEET_ID = "1nO-hcNX2naH7hCS0WbRd7r907SvisjhD96I8R1Wx1Fs";
 const DATA_URL   = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=514970007`;
 const CONFIG_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=awc_config`;
 
-const HISTORY_POINTS = 60;   // points shown on the chart
-const FORECAST_POINTS = 10;  // predicted points appended
+const HISTORY_HOURS = 24; // chart shows the last 24h regardless of reading cadence
 
 let chart = null;
 let nextPingAt = null; // when the ESP32 should report in next
@@ -415,7 +414,10 @@ function render(rows, cfg) {
   document.getElementById("chartbox").style.display = "";
 
   // --- chart ---
-  const hist = data.slice(-HISTORY_POINTS);
+  const cutoff = last.t.getTime() - HISTORY_HOURS * 3600 * 1000;
+  const hist = data.filter(d => d.t.getTime() >= cutoff);
+  // forecast tail ≈ 8% of the window (~2h on a full day) so it stays visible
+  const FORECAST_POINTS = Math.max(10, Math.round(hist.length * 0.08));
 
   // median interval between readings, used to space forecast points
   const gaps = [];
