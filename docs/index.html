@@ -393,10 +393,18 @@ function render(rows, cfg) {
   document.getElementById("v-line").textContent = v.line;
   document.getElementById("v-sub").textContent = v.sub;
 
-  // firmware sleeps `sleep_time_in_minutes` between readings (default 30, same as main.cpp)
+  // firmware sleeps `sleep_time_in_minutes` between readings (default 30, same as main.cpp),
+  // but each cycle also spends ~10s reading the DHT and talking to Google. So predict the
+  // next reading from the *observed* cadence: median gap of the last 60 readings
+  // (median, not mean — a single Wi-Fi hiccup of 5 min would wreck an average)
   const sleepMin = parseInt(cfg["sleep_time_in_minutes"]) > 0
     ? parseInt(cfg["sleep_time_in_minutes"]) : 30;
-  nextPingAt = last.t.getTime() + sleepMin * 60000;
+  const cadGaps = data.slice(-60)
+    .map((d, i, a) => (i ? d.t - a[i - 1].t : null))
+    .filter(Boolean)
+    .sort((a, b) => a - b);
+  const cadence = cadGaps[Math.floor(cadGaps.length / 2)] || sleepMin * 60000;
+  nextPingAt = last.t.getTime() + cadence;
 
   const ago = Math.round((Date.now() - last.t.getTime()) / 60000);
   document.getElementById("status").textContent =
@@ -607,7 +615,10 @@ function renderHeatmap(table, low, high) {
   });
 }
 
+let refreshing = false;
 async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
   try {
     const [dataRes, cfgRes] = await Promise.all([fetch(DATA_URL), fetch(CONFIG_URL)]);
     const rows = parseCsv(await dataRes.text()).slice(1); // drop header
@@ -618,6 +629,8 @@ async function refresh() {
     const el = document.getElementById("status");
     el.textContent = "Couldn't reach the sensor data 😢 (" + e.message + ")";
     el.className = "error";
+  } finally {
+    refreshing = false;
   }
 }
 
@@ -632,6 +645,8 @@ setInterval(() => {
     el.textContent = `📡 next reading in ${mm}:${ss}`;
   } else {
     el.textContent = "📡 next reading: any second now… 👀";
+    // reading is overdue — poll every 10s instead of waiting for the minute tick
+    if (s <= -5 && (-s) % 10 === 0) refresh();
   }
 }, 1000);
 
