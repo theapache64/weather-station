@@ -188,7 +188,7 @@
 
 <div class="chart-wrap neu" id="chartbox" style="display:none">
   <h2>Discomfort history &amp; forecast</h2>
-  <div class="hint">dashed part = crystal ball 🔮 — what it usually feels like at this hour, averaged over the last 7 days</div>
+  <div class="hint" id="crystal-hint">dashed part = crystal ball 🔮 — what it usually feels like at this hour, averaged over the last 7 days</div>
   <div class="chart-inner neu-inset">
     <canvas id="chart" height="300"></canvas>
   </div>
@@ -443,8 +443,14 @@ function render(rows, cfg) {
   // --- chart ---
   const cutoff = last.t.getTime() - HISTORY_HOURS * 3600 * 1000;
   const hist = data.filter(d => d.t.getTime() >= cutoff);
-  // forecast tail ≈ 8% of the window (~2h on a full day) so it stays visible
-  const FORECAST_POINTS = Math.max(10, Math.round(hist.length * 0.08));
+
+  // crystal ball stays off until there's a full week of history to predict from;
+  // once on, the forecast tail is ≈ 8% of the window (~2h) so it stays visible
+  const spanDays = (last.t.getTime() - data[0].t.getTime()) / 86400000;
+  const FORECAST_POINTS = spanDays >= 7 ? Math.max(10, Math.round(hist.length * 0.08)) : 0;
+  document.getElementById("crystal-hint").textContent = FORECAST_POINTS
+    ? "dashed part = crystal ball 🔮 — what it usually feels like at this hour, averaged over the last 7 days"
+    : `🔮 crystal ball forecast unlocks after 7 days of data — ${Math.floor(spanDays)}/7 collected`;
 
   // median interval between readings, used to space forecast points
   const gaps = [];
@@ -511,21 +517,24 @@ function render(rows, cfg) {
         line("Discomfort score", histPart(scores), "#ff4b4b", {
           backgroundColor: "rgba(255,75,75,0.15)", fill: true, borderWidth: 4,
         }),
-        crystal(predPart(scores, predScore), "#ff4b4b", {
+        ...(FORECAST_POINTS ? [crystal(predPart(scores, predScore), "#ff4b4b", {
           backgroundColor: "rgba(255,75,75,0.06)", fill: true, borderWidth: 3,
-        }),
+        })] : []),
         ...(hasYesterday ? [line("Yesterday's score", yesterdayScores, "#8a8a8a", {
           borderDash: [2, 5], borderWidth: 2,
         })] : []),
         line("Temperature °C", histPart(temps), "#111111", { borderWidth: 2, yAxisID: "y1" }),
-        crystal(predPart(temps, predTemp), "#111111", { yAxisID: "y1" }),
         line("Humidity %", histPart(hums), "#2f6fed", { borderWidth: 2, yAxisID: "y1" }),
-        crystal(predPart(hums, predHum), "#2f6fed", { yAxisID: "y1" }),
+        ...(FORECAST_POINTS ? [
+          crystal(predPart(temps, predTemp), "#111111", { yAxisID: "y1" }),
+          crystal(predPart(hums, predHum), "#2f6fed", { yAxisID: "y1" }),
+        ] : []),
       ],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      animation: false, // ~1k points per line — skip the entry animation
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: {
