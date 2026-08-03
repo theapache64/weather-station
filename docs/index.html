@@ -497,6 +497,11 @@ function render(rows, cfg) {
   Chart.defaults.font.family = '"Courier New", ui-monospace, monospace';
   Chart.defaults.font.weight = "bold";
 
+  // axis top = highest plotted value + 20 of breathing room, rounded to a clean tick
+  const allVals = [scores, temps, hums, predScore, predTemp, predHum, yesterdayScores]
+    .flat().filter(v => v !== null && !isNaN(v));
+  const yMax = Math.ceil((Math.max(...allVals) + 20) / 5) * 5;
+
   const cfgChart = {
     type: "line",
     data: {
@@ -532,8 +537,8 @@ function render(rows, cfg) {
       },
       scales: {
         x: { ticks: { color: "#111111", maxTicksLimit: 10 }, grid: { display: false } },
-        y: { min: 0, max: 60, ticks: { color: "#ff4b4b" }, grid: { color: "rgba(17,17,17,0.12)" } },
-        y1: { min: 0, max: 60, position: "right", ticks: { color: "#111111" }, grid: { display: false } },
+        y: { min: 0, max: yMax, ticks: { color: "#ff4b4b" }, grid: { color: "rgba(17,17,17,0.12)" } },
+        y1: { min: 0, max: yMax, position: "right", ticks: { color: "#111111" }, grid: { display: false } },
       },
     },
   };
