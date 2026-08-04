@@ -333,7 +333,10 @@ function forecast(week, key, futureTimes, min = -Infinity, max = Infinity) {
 
 function thresholds(cfg) {
   const hour = new Date().getHours();
-  const night = hour >= 21 || hour < 7;
+  // day/night switch follows sunrise_hour/sunset_hour from the config sheet
+  const sunrise = parseInt(cfg["sunrise_hour"]) || 7;
+  const sunset  = parseInt(cfg["sunset_hour"])  || 21;
+  const night = hour < sunrise || hour >= sunset;
   const comfort = parseFloat(cfg["comfort_temperature"]) || 23;
   return {
     low:  parseFloat(cfg[night ? "ac_off_score_night" : "ac_off_score_day"]) || 13,
@@ -346,52 +349,23 @@ function thresholds(cfg) {
 }
 
 // ---- discomfort score, computed client-side from raw temp/humidity ----
-// ported from the firmware's old calculateScore()/calculateHeatIndex(), with the
-// continuity fix: penalty branches anchor to the normal slope's value at the
-// threshold (the on-device version once dropped ~20 → ~5 as humidity crossed 70)
-function heatIndexC(tempC, hum) {
-  if (tempC < 26) return tempC + (hum > 70 ? (hum - 70) * 0.02 : 0);
-  const T = tempC * 9 / 5 + 32, RH = hum;
-  let hiF = 0.5 * (T + 61 + (T - 68) * 1.2 + RH * 0.094);
-  if (hiF > 80) {
-    hiF = -42.379 + 2.04901523 * T + 10.14333127 * RH - 0.22475541 * T * RH
-      - 0.00683783 * T * T - 0.05481717 * RH * RH + 0.00122874 * T * T * RH
-      + 0.00085282 * T * RH * RH - 0.00000199 * T * T * RH * RH;
-    if (RH < 13 && T >= 80 && T <= 112)
-      hiF -= ((13 - RH) / 4) * Math.sqrt((17 - Math.abs(T - 95)) / 17);
-    if (RH > 85 && T >= 80 && T <= 87)
-      hiF += ((RH - 85) / 10) * ((87 - T) / 5);
-  }
-  return (hiF - 32) * 5 / 9;
+// Steadman Apparent Temperature (indoor form: no wind, no sun), per the
+// Australian Bureau of Meteorology: AT = T + 0.33·e − 4.0, where e is the
+// water-vapour pressure in hPa. Humidity contributes through e, so muggy air
+// counts a lot when warm and very little when cool — matching how it feels.
+// http://www.bom.gov.au/info/thermal_stress/
+function apparentTempC(T, rh) {
+  const e = (rh / 100) * 6.105 * Math.exp((17.27 * T) / (237.7 + T));
+  return T + 0.33 * e - 4.0;
 }
 
+// score = how far the feels-like temperature sits above comfort, scaled by
+// temperature_weight from the config sheet. 0 = at or below comfort.
 function calcScore(temp, hum, cfg) {
   const comfortT = parseFloat(cfg["comfort_temperature"]) || 23;
-  const comfortH = parseFloat(cfg["comfort_humidity"]) || 50;
   const wT = parseFloat(cfg["temperature_weight"]) || 4;
-  const wH = parseFloat(cfg["humidity_weight"]) || 1;
-  const thT = parseFloat(cfg["temperature_threshold"]) || 30;
-  const thH = parseFloat(cfg["humidity_threshold"]) || 70;
-
-  const feels = heatIndexC(temp, hum);
-  let score = 0;
-
-  if (feels > comfortT) {
-    score += feels > thT
-      ? wT * ((thT - comfortT) + Math.pow(feels - thT, 2))
-      : wT * (feels - comfortT);
-  }
-  if (hum > comfortH) {
-    score += hum > thH
-      ? wH * ((thH - comfortH) + Math.pow(hum - thH, 1.5))
-      : wH * (hum - comfortH);
-  }
-  if (hum > 75 && temp > comfortT)
-    score += wT * (temp - comfortT) * ((hum - 75) / 25);
-  if (hum < 40 && temp > comfortT)
-    score *= 1 - ((40 - hum) / 40) * 0.3;
-
-  return Math.trunc(score * 100) / 100;
+  const feels = apparentTempC(temp, hum);
+  return Math.max(0, Math.trunc(wT * (feels - comfortT) * 100) / 100);
 }
 
 function pickVerdict(score, temp, hum, cfg) {
@@ -489,8 +463,9 @@ function render(rows, cfg) {
 
   const { low: tipLow, high: tipHigh } = thresholds(cfg);
   document.getElementById("card-score").dataset.tip =
-    `Heat + humidity squashed into one "how bad does it feel" number. ` +
-    `Under ${tipLow}: it's fine. ${tipLow}–${tipHigh}: warm, complaints debatable. ` +
+    `How much hotter it FEELS than the comfort temperature — from Steadman's ` +
+    `apparent temperature (air temp + humidity via vapour pressure). ` +
+    `Under ${tipLow}: fine. ${tipLow}–${tipHigh}: warm, debatable. ` +
     `Over ${tipHigh}: officially hot. (Cold is judged separately, by temperature.)`;
 
   const v = pickVerdict(last.score, last.temp, last.hum, cfg);
