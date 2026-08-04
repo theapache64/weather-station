@@ -345,6 +345,55 @@ function thresholds(cfg) {
   };
 }
 
+// ---- discomfort score, computed client-side from raw temp/humidity ----
+// ported from the firmware's old calculateScore()/calculateHeatIndex(), with the
+// continuity fix: penalty branches anchor to the normal slope's value at the
+// threshold (the on-device version once dropped ~20 → ~5 as humidity crossed 70)
+function heatIndexC(tempC, hum) {
+  if (tempC < 26) return tempC + (hum > 70 ? (hum - 70) * 0.02 : 0);
+  const T = tempC * 9 / 5 + 32, RH = hum;
+  let hiF = 0.5 * (T + 61 + (T - 68) * 1.2 + RH * 0.094);
+  if (hiF > 80) {
+    hiF = -42.379 + 2.04901523 * T + 10.14333127 * RH - 0.22475541 * T * RH
+      - 0.00683783 * T * T - 0.05481717 * RH * RH + 0.00122874 * T * T * RH
+      + 0.00085282 * T * RH * RH - 0.00000199 * T * T * RH * RH;
+    if (RH < 13 && T >= 80 && T <= 112)
+      hiF -= ((13 - RH) / 4) * Math.sqrt((17 - Math.abs(T - 95)) / 17);
+    if (RH > 85 && T >= 80 && T <= 87)
+      hiF += ((RH - 85) / 10) * ((87 - T) / 5);
+  }
+  return (hiF - 32) * 5 / 9;
+}
+
+function calcScore(temp, hum, cfg) {
+  const comfortT = parseFloat(cfg["comfort_temperature"]) || 23;
+  const comfortH = parseFloat(cfg["comfort_humidity"]) || 50;
+  const wT = parseFloat(cfg["temperature_weight"]) || 4;
+  const wH = parseFloat(cfg["humidity_weight"]) || 1;
+  const thT = parseFloat(cfg["temperature_threshold"]) || 30;
+  const thH = parseFloat(cfg["humidity_threshold"]) || 70;
+
+  const feels = heatIndexC(temp, hum);
+  let score = 0;
+
+  if (feels > comfortT) {
+    score += feels > thT
+      ? wT * ((thT - comfortT) + Math.pow(feels - thT, 2))
+      : wT * (feels - comfortT);
+  }
+  if (hum > comfortH) {
+    score += hum > thH
+      ? wH * ((thH - comfortH) + Math.pow(hum - thH, 1.5))
+      : wH * (hum - comfortH);
+  }
+  if (hum > 75 && temp > comfortT)
+    score += wT * (temp - comfortT) * ((hum - 75) / 25);
+  if (hum < 40 && temp > comfortT)
+    score *= 1 - ((40 - hum) / 40) * 0.3;
+
+  return Math.trunc(score * 100) / 100;
+}
+
 function pickVerdict(score, temp, hum, cfg) {
   const { low, high, comfort, chillyAt, coldAt } = thresholds(cfg);
   const pick = arr => arr[Math.floor(Math.random() * arr.length)];
@@ -420,10 +469,17 @@ function pickVerdict(score, temp, hum, cfg) {
 }
 
 function render(rows, cfg) {
-  // rows: [Timestamp, temperature, humidity, score, note]
+  // rows: [Timestamp, temperature, humidity, score(ignored), note]
+  // the sheet's score column is legacy — we compute scores here so the whole
+  // history uses one consistent (fixed) formula
   const data = rows
-    .map(r => ({ t: parseTimestamp(r[0]), temp: +r[1], hum: +r[2], score: +r[3] }))
-    .filter(r => r.t && !isNaN(r.temp));
+    .map(r => {
+      const temp = +r[1], hum = +r[2];
+      return { t: parseTimestamp(r[0]), temp, hum, score: calcScore(temp, hum, cfg) };
+    })
+    // sanity: drop impossible readings (DHT glitches, test rows) — DHT22 tops out at 80°C
+    .filter(r => r.t && !isNaN(r.temp) &&
+      r.temp > -20 && r.temp < 60 && r.hum >= 0 && r.hum <= 100);
   if (!data.length) throw new Error("no data rows");
 
   const last = data[data.length - 1];
@@ -578,14 +634,9 @@ function render(rows, cfg) {
 
   if (chart) { chart.data = cfgChart.data; chart.update(); }
   else chart = new Chart(document.getElementById("chart"), cfgChart);
-}
 
-// run a gviz query-language query against the data tab; Google computes it server-side
-async function qRaw(query) {
-  const res = await fetch(DATA_URL + "&tq=" + encodeURIComponent(query));
-  return parseCsv(await res.text());
+  return data;
 }
-const q = query => qRaw(query).then(rows => rows.slice(1)); // drop header
 
 const qDatetime = d =>
   `datetime '${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-` +
@@ -593,40 +644,28 @@ const qDatetime = d =>
   `${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}'`;
 
 // columns: A=Timestamp B=temperature C=humidity D=score
-async function loadExtras(cfg) {
+// all stats computed locally from the downloaded data — scores in the sheet are legacy
+function loadExtras(cfg, data) {
   const { low, high, chillyAt, coldAt } = thresholds(cfg);
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-  const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
 
-  const [hot, cold, swamp, peak, todayAll, todayValid, lastHot, lastCold, heat, heatTemp] = await Promise.all([
-    q("select A, B order by B desc limit 1"),
-    q("select A, B order by B asc limit 1"),
-    q("select A, C order by C desc limit 1"),
-    q("select A, D order by D desc limit 1"),
-    q(`select count(D) where A >= ${qDatetime(todayStart)}`),
-    q(`select count(D) where A >= ${qDatetime(todayStart)} and (D >= ${low} or B <= ${chillyAt})`),
-    q(`select A where D >= ${high} order by A desc limit 1`),
-    q(`select A where B <= ${coldAt} order by A desc limit 1`),
-    qRaw(`select hour(A), avg(D) where A >= ${qDatetime(weekAgo)} group by hour(A) pivot toDate(A)`),
-    qRaw(`select hour(A), avg(B) where A >= ${qDatetime(weekAgo)} group by hour(A) pivot toDate(A)`),
-  ]);
-
-  const when = s => {
-    const d = parseTimestamp(s);
-    return d ? `${d.getMonth() + 1}/${d.getDate()} ${fmtTime(d)}` : "?";
+  const when = d => `${d.getMonth() + 1}/${d.getDate()} ${fmtTime(d)}`;
+  const maxBy = f => data.reduce((b, d) => (f(d) > f(b) ? d : b));
+  const minBy = f => data.reduce((b, d) => (f(d) < f(b) ? d : b));
+  const rec = (id, d, val, unit) => {
+    document.getElementById(id).textContent = `${val.toFixed(1)}${unit} · ${when(d.t)}`;
   };
-  const rec = (id, row, unit) => {
-    if (row[0]) document.getElementById(id).textContent =
-      `${(+row[0][1]).toFixed(1)}${unit} · ${when(row[0][0])}`;
-  };
-  rec("r-temp", hot, "°C");
-  rec("r-cold", cold, "°C");
-  rec("r-hum", swamp, "%");
-  rec("r-score", peak, " pts");
+  const hot = maxBy(d => d.temp), cold = minBy(d => d.temp),
+        swamp = maxBy(d => d.hum), peak = maxBy(d => d.score);
+  rec("r-temp", hot, hot.temp, "°C");
+  rec("r-cold", cold, cold.temp, "°C");
+  rec("r-hum", swamp, swamp.hum, "%");
+  rec("r-score", peak, peak.score, " pts");
 
   // complaint validity: share of today's readings outside the comfort zone (too hot OR too cold)
-  const total = +(todayAll[0]?.[0] ?? 0);
-  const valid = +(todayValid[0]?.[0] ?? 0);
+  const today = data.filter(d => d.t >= todayStart);
+  const total = today.length;
+  const valid = today.filter(d => d.score >= low || d.temp <= chillyAt).length;
   const validPct = total ? Math.round((valid / total) * 100) : null;
   document.getElementById("c-valid").textContent = validPct ?? "–";
   document.getElementById("card-valid").dataset.tip =
@@ -635,58 +674,69 @@ async function loadExtras(cfg) {
     `So ${validPct ?? 0}% of today was genuinely uncomfortable. The rest was just vibes.`;
 
   // streaks: days since each kind of officially-bad weather
-  const since = (row, emoji, word) => {
-    if (!row[0] || !row[0][0]) return `${emoji} never officially ${word}`;
-    const days = Math.floor((Date.now() - parseTimestamp(row[0][0])) / 86400000);
+  let lastHot = null, lastCold = null;
+  for (const d of data) {
+    if (d.score >= high) lastHot = d;
+    if (d.temp <= coldAt) lastCold = d;
+  }
+  const since = (d, emoji, word) => {
+    if (!d) return `${emoji} never officially ${word}`;
+    const days = Math.floor((Date.now() - d.t.getTime()) / 86400000);
     return days === 0 ? `${emoji} officially ${word} TODAY`
       : `${emoji} ${days} day${days === 1 ? "" : "s"} since officially ${word}`;
   };
   document.getElementById("streak").textContent =
     `${since(lastHot, "🔥", "hot")} · ${since(lastCold, "🧊", "cold")}`;
 
-  renderHeatmap(heat, heatTemp, low, high, chillyAt);
+  renderHeatmap(data, cfg);
   document.getElementById("extras").style.display = "";
 }
 
-function renderHeatmap(table, tempTable, low, high, chillyAt) {
-  // pivoted CSV: header = ["hour(Timestamp)", "2026-8-1", "2026-8-2", ...], rows = [hour, avg, avg, ...]
+function renderHeatmap(data, cfg) {
+  // hour × day grid over the last 7 days, averaged from client-computed scores
+  const { low, high, chillyAt } = thresholds(cfg);
   const el = document.getElementById("heatmap");
   el.innerHTML = "";
-  if (table.length < 2) return;
 
-  // avg temperature per hour/day, keyed by hour — used to paint cold hours blue
-  const tempByHour = Object.fromEntries(tempTable.slice(1).map(r => [r[0], r]));
+  const weekAgo = Date.now() - 7 * 86400000;
+  const recent = data.filter(d => d.t.getTime() >= weekAgo);
+  if (!recent.length) return;
 
-  const days = table[0].slice(1).map(s => {
-    const [Y, M, D] = s.split("-").map(Number);
-    return new Date(Y, M - 1, D);
-  });
-  const nDates = days.length;
-  const rows = table.slice(1);
+  const dayKey = d => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const cells = new Map(); // "day|hour" -> { s, t, n }
+  const dayInfo = new Map(); // dayKey -> Date (insertion order = chronological)
+  for (const d of recent) {
+    const dk = dayKey(d.t);
+    if (!dayInfo.has(dk)) dayInfo.set(dk, d.t);
+    const k = dk + "|" + d.t.getHours();
+    const c = cells.get(k) || { s: 0, t: 0, n: 0 };
+    c.s += d.score; c.t += d.temp; c.n++;
+    cells.set(k, c);
+  }
+  const days = [...dayInfo.entries()];
+  const hours = [...new Set(recent.map(d => d.t.getHours()))].sort((a, b) => a - b);
 
   const head = document.createElement("div");
   head.className = "hm-row";
-  head.innerHTML = `<div class="hm-label"></div>` + days.map(d =>
-    `<div class="hm-cell hm-head">${d.toLocaleDateString([], { weekday: "short" })}</div>`
-  ).join("") + `<div class="hm-cell hm-head empty"></div>`.repeat(7 - nDates);
+  head.innerHTML = `<div class="hm-label"></div>` + days.map(([, date]) =>
+    `<div class="hm-cell hm-head">${date.toLocaleDateString([], { weekday: "short" })}</div>`
+  ).join("") + `<div class="hm-cell hm-head empty"></div>`.repeat(7 - days.length);
   el.appendChild(head);
 
   const color = (score, temp) =>
-    temp !== null && temp <= chillyAt ? "#74c0fc"
+    temp <= chillyAt ? "#74c0fc"
       : score >= high ? "var(--red)" : score >= low ? "var(--yellow)" : "#6bcb77";
 
-  rows.sort((a, b) => +a[0] - +b[0]).forEach(r => {
+  hours.forEach(h => {
     const row = document.createElement("div");
     row.className = "hm-row";
-    let html = `<div class="hm-label">${String(r[0]).padStart(2, "0")}:00</div>`;
-    for (let i = 1; i <= 7; i++) {
-      const v = r[i];
-      const tv = tempByHour[r[0]]?.[i];
-      const temp = (tv === undefined || tv === "") ? null : +tv;
-      html += (v === undefined || v === "")
-        ? `<div class="hm-cell empty"></div>`
-        : `<div class="hm-cell" style="background:${color(+v, temp)}"` +
-          ` title="avg score ${(+v).toFixed(1)}${temp !== null ? `, avg temp ${temp.toFixed(1)}°C` : ""}"></div>`;
+    let html = `<div class="hm-label">${String(h).padStart(2, "0")}:00</div>`;
+    for (let i = 0; i < 7; i++) {
+      const c = days[i] && cells.get(days[i][0] + "|" + h);
+      if (!c) { html += `<div class="hm-cell empty"></div>`; continue; }
+      const avgS = c.s / c.n, avgT = c.t / c.n;
+      html += `<div class="hm-cell" style="background:${color(avgS, avgT)}"` +
+              ` title="avg score ${avgS.toFixed(1)} · avg temp ${avgT.toFixed(1)}°C"></div>`;
     }
     row.innerHTML = html;
     el.appendChild(row);
@@ -701,8 +751,8 @@ async function refresh() {
     const [dataRes, cfgRes] = await Promise.all([fetch(DATA_URL), fetch(CONFIG_URL)]);
     const rows = parseCsv(await dataRes.text()).slice(1); // drop header
     const cfg = Object.fromEntries(parseCsv(await cfgRes.text()).slice(1));
-    render(rows, cfg);
-    loadExtras(cfg).catch(console.error); // extras are non-critical, don't block the main view
+    const data = render(rows, cfg);
+    try { loadExtras(cfg, data); } catch (e) { console.error(e); } // extras are non-critical
   } catch (e) {
     const el = document.getElementById("status");
     el.textContent = "Couldn't reach the sensor data 😢 (" + e.message + ")";
