@@ -141,6 +141,15 @@
   #heatmap .hm-cell.empty { border-color: rgba(17,17,17,0.15); background: transparent; }
   #heatmap .hm-head { font-size: 0.6rem; font-weight: 700; text-align: center; border: none; min-height: auto; }
 
+  .vstats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 24px;
+    text-align: center;
+  }
+  .vstats .vs-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 2px; }
+  .vstats .vs-value { font-size: 2rem; font-weight: 700; margin-top: 8px; }
+
   footer { margin-top: 32px; font-size: 0.75rem; font-weight: 400; text-align: center; }
   footer a { color: var(--ink); }
 
@@ -214,10 +223,25 @@
   </div>
 </div>
 
+<div class="bottom-grid" id="visitor-stats" style="display:none">
+  <div class="panel neu" style="grid-column: 1 / -1">
+    <h2>👀 Audience Report</h2>
+    <div class="hint">who's been checking if it's just them</div>
+    <div class="vstats">
+      <div><div class="vs-label">All-time visits</div><div class="vs-value" id="vs-total">–</div></div>
+      <div><div class="vs-label">All-time uniques</div><div class="vs-value" id="vs-unique">–</div></div>
+      <div><div class="vs-label">Today's visits</div><div class="vs-value" id="vs-today">–</div></div>
+      <div><div class="vs-label">Today's uniques</div><div class="vs-value" id="vs-today-unique">–</div></div>
+      <div><div class="vs-label">Peak hour</div><div class="vs-value" id="vs-peak">–</div></div>
+    </div>
+  </div>
+</div>
+
 <footer>
   Powered by one very dedicated ESP32 + DHT22 in a corner somewhere.<br>
   Data refreshes every 60s ·
   <a href="https://docs.google.com/spreadsheets/d/1nO-hcNX2naH7hCS0WbRd7r907SvisjhD96I8R1Wx1Fs" target="_blank">raw data</a>
+  <span id="visits"></span>
 </footer>
 
 <script>
@@ -704,7 +728,56 @@ setInterval(() => {
   }
 }, 1000);
 
+// --- visitor counter (same Google Form + Sheet trick the sensor uses) ---
+const VISITS_FORM = "https://docs.google.com/forms/d/e/1FAIpQLSflT6MkC3XphtmZ95rQFIWwOSXb8c2omdChtnx5r48AkotAww/formResponse";
+const VISITS_SHEET = "https://docs.google.com/spreadsheets/d/19ghfS0SXRRfkgBdJziuvx4_Idm3BYXxXZp3yIzsVhAE/gviz/tq?tqx=out:csv";
+const APP_NAME = "weather-station";
+
+async function countVisit() {
+  try {
+    // anonymous per-browser id, minted once and reused forever
+    let uid = localStorage.getItem("visitor-uid");
+    if (!uid) {
+      uid = crypto.randomUUID();
+      localStorage.setItem("visitor-uid", uid);
+    }
+    // every page load counts as a visit
+    await fetch(VISITS_FORM, {
+      method: "POST", mode: "no-cors",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "entry.366569564=" + encodeURIComponent(APP_NAME) +
+            "&entry.1760067431=" + encodeURIComponent(uid),
+    });
+    // columns: A=Timestamp, B=Email (unused), C=app
+    const qv = async query => parseCsv(await (await fetch(
+      VISITS_SHEET + "&tq=" + encodeURIComponent(query))).text()).slice(1);
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+
+    const [total, uniques, today, todayUniques, peak] = await Promise.all([
+      qv(`select count(A) where C = '${APP_NAME}'`),
+      qv(`select D, count(A) where C = '${APP_NAME}' and D != '' group by D`),
+      qv(`select count(A) where C = '${APP_NAME}' and A >= ${qDatetime(todayStart)}`),
+      qv(`select D, count(A) where C = '${APP_NAME}' and D != '' and A >= ${qDatetime(todayStart)} group by D`),
+      qv(`select hour(A), count(A) where C = '${APP_NAME}' group by hour(A) order by count(A) desc limit 1`),
+    ]);
+
+    const n = +(total[0]?.[0] ?? 0);
+    if (n) document.getElementById("visits").textContent =
+      ` · 👀 ${n.toLocaleString()} visitor${n === 1 ? "" : "s"} checked if it's just them`;
+
+    document.getElementById("vs-total").textContent = n.toLocaleString();
+    document.getElementById("vs-unique").textContent = uniques.length.toLocaleString();
+    document.getElementById("vs-today").textContent = (+(today[0]?.[0] ?? 0)).toLocaleString();
+    document.getElementById("vs-today-unique").textContent = todayUniques.length.toLocaleString();
+    const peakH = peak[0]?.[0];
+    document.getElementById("vs-peak").textContent =
+      peakH !== undefined ? `${String(peakH).padStart(2, "0")}:00` : "–";
+    document.getElementById("visitor-stats").style.display = "";
+  } catch (e) { /* the counter is decoration — never break the dashboard over it */ }
+}
+
 refresh();
+countVisit();
 setInterval(refresh, 60000);
 </script>
 </body>
