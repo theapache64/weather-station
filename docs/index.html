@@ -246,8 +246,10 @@
 
 <script>
 const SHEET_ID = "1nO-hcNX2naH7hCS0WbRd7r907SvisjhD96I8R1Wx1Fs";
-const DATA_URL   = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=514970007`;
-const CONFIG_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=awc_config`;
+// headers=1 pins the header to exactly one row — without it gviz guesses, and
+// can silently swallow many config rows into a merged "header" (seen 2026-08-05)
+const DATA_URL   = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=514970007&headers=1`;
+const CONFIG_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=awc_config&headers=1`;
 
 const HISTORY_HOURS = 24; // chart shows the last 24h regardless of reading cadence
 
@@ -331,8 +333,7 @@ function forecast(week, key, futureTimes, min = -Infinity, max = Infinity) {
   });
 }
 
-function thresholds(cfg) {
-  const hour = new Date().getHours();
+function thresholds(cfg, hour = new Date().getHours()) {
   // day/night switch follows sunrise_hour/sunset_hour from the config sheet
   const sunrise = parseInt(cfg["sunrise_hour"]) || 7;
   const sunset  = parseInt(cfg["sunset_hour"])  || 21;
@@ -669,7 +670,6 @@ function loadExtras(cfg, data) {
 
 function renderHeatmap(data, cfg) {
   // hour × day grid over the last 7 days, averaged from client-computed scores
-  const { low, high, chillyAt } = thresholds(cfg);
   const el = document.getElementById("heatmap");
   el.innerHTML = "";
 
@@ -698,9 +698,13 @@ function renderHeatmap(data, cfg) {
   ).join("") + `<div class="hm-cell hm-head empty"></div>`.repeat(7 - days.length);
   el.appendChild(head);
 
-  const color = (score, temp) =>
-    temp <= chillyAt ? "#74c0fc"
+  // judge each cell by its own hour's day/night thresholds — not "now"'s,
+  // otherwise the map recolors depending on what time you look at it
+  const color = (score, temp, h) => {
+    const { low, high, chillyAt } = thresholds(cfg, h);
+    return temp <= chillyAt ? "#74c0fc"
       : score >= high ? "var(--red)" : score >= low ? "var(--yellow)" : "#6bcb77";
+  };
 
   hours.forEach(h => {
     const row = document.createElement("div");
@@ -710,7 +714,7 @@ function renderHeatmap(data, cfg) {
       const c = days[i] && cells.get(days[i][0] + "|" + h);
       if (!c) { html += `<div class="hm-cell empty"></div>`; continue; }
       const avgS = c.s / c.n, avgT = c.t / c.n;
-      html += `<div class="hm-cell" style="background:${color(avgS, avgT)}"` +
+      html += `<div class="hm-cell" style="background:${color(avgS, avgT, h)}"` +
               ` title="avg score ${avgS.toFixed(1)} · avg temp ${avgT.toFixed(1)}°C"></div>`;
     }
     row.innerHTML = html;
