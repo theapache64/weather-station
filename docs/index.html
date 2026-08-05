@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Weather Station · hot? cold? or is it just you?</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
   :root {
     --bg: #fdfdfb;
@@ -108,6 +109,16 @@
   .chart-wrap .hint { font-size: 0.72rem; font-weight: 400; text-align: center; margin-bottom: 16px; }
   .chart-inner { padding: 16px; }
   canvas { width: 100% !important; }
+  .zoom-hint { font-size: 0.7rem; font-weight: 400; text-align: center; margin-top: 10px; }
+  #zoom-reset {
+    display: block; margin: 10px auto 0;
+    font-family: inherit; font-weight: 700; font-size: 0.8rem;
+    text-transform: uppercase; letter-spacing: 1px;
+    padding: 8px 16px; cursor: pointer;
+    background: var(--red); color: #fff;
+    border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink);
+  }
+  #zoom-reset:active { box-shadow: 1px 1px 0 var(--ink); transform: translate(3px, 3px); }
   #countdown {
     margin: 16px auto 0; width: fit-content;
     font-size: 0.8rem; padding: 6px 14px;
@@ -201,6 +212,8 @@
   <div class="chart-inner neu-inset">
     <canvas id="chart" height="300"></canvas>
   </div>
+  <div class="zoom-hint">🔍 drag across the chart to zoom into a time range · double-click or ESC to reset</div>
+  <button id="zoom-reset" style="display:none">↩️ reset zoom</button>
   <div id="countdown">📡 …</div>
 </div>
 
@@ -599,6 +612,21 @@ function render(rows, cfg) {
             filter: item => item.text !== "🔮", // dashed twins share their solid line's legend
           },
         },
+        zoom: {
+          zoom: {
+            drag: {
+              enabled: true,
+              backgroundColor: "rgba(255,217,61,0.4)",
+              borderColor: "#111111",
+              borderWidth: 2,
+            },
+            mode: "x",
+            onZoomComplete: ({ chart: c }) => {
+              document.getElementById("zoom-reset").style.display =
+                c.isZoomedOrPanned() ? "" : "none";
+            },
+          },
+        },
       },
       scales: {
         x: { ticks: { color: "#111111", maxTicksLimit: 10 }, grid: { display: false } },
@@ -608,11 +636,25 @@ function render(rows, cfg) {
     },
   };
 
-  if (chart) { chart.data = cfgChart.data; chart.update(); }
-  else chart = new Chart(document.getElementById("chart"), cfgChart);
+  if (chart && chart.isZoomedOrPanned && chart.isZoomedOrPanned()) {
+    // user is inspecting a zoomed region — don't yank the chart out from under them
+  } else if (chart) {
+    chart.data = cfgChart.data;
+    chart.update();
+  } else {
+    chart = new Chart(document.getElementById("chart"), cfgChart);
+  }
 
   return data;
 }
+
+function resetZoom() {
+  if (chart) chart.resetZoom();
+  document.getElementById("zoom-reset").style.display = "none";
+}
+document.getElementById("zoom-reset").addEventListener("click", resetZoom);
+document.getElementById("chart").addEventListener("dblclick", resetZoom);
+document.addEventListener("keydown", e => { if (e.key === "Escape") resetZoom(); });
 
 const qDatetime = d =>
   `datetime '${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-` +
