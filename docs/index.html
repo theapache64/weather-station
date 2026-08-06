@@ -200,10 +200,6 @@
     <div class="label">Discomfort Score</div>
     <div class="value"><span id="c-score">–</span></div>
   </div>
-  <div class="card neu" id="card-valid" data-tip="How much of today was genuinely uncomfortable.">
-    <div class="label">Complaint Validity</div>
-    <div class="value"><span id="c-valid">–</span><span class="unit"> %</span></div>
-  </div>
 </div>
 
 <div class="chart-wrap neu" id="chartbox" style="display:none">
@@ -681,8 +677,7 @@ const qDatetime = d =>
 // columns: A=Timestamp B=temperature C=humidity D=score
 // all stats computed locally from the downloaded data — scores in the sheet are legacy
 function loadExtras(cfg, data) {
-  const { low, high, chillyAt, coldAt } = thresholds(cfg);
-  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const { high, coldAt } = thresholds(cfg);
 
   const when = d => `${d.getMonth() + 1}/${d.getDate()} ${fmtTime(d)}`;
   const maxBy = f => data.reduce((b, d) => (f(d) > f(b) ? d : b));
@@ -696,17 +691,6 @@ function loadExtras(cfg, data) {
   rec("r-cold", cold, cold.temp, "°C");
   rec("r-hum", swamp, swamp.hum, "%");
   rec("r-score", peak, peak.score, " pts");
-
-  // complaint validity: share of today's readings outside the comfort zone (too hot OR too cold)
-  const today = data.filter(d => d.t >= todayStart);
-  const total = today.length;
-  const valid = today.filter(d => d.score >= low || d.temp <= chillyAt).length;
-  const validPct = total ? Math.round((valid / total) * 100) : null;
-  document.getElementById("c-valid").textContent = validPct ?? "–";
-  document.getElementById("card-valid").dataset.tip =
-    `Of today's ${total} readings, ${valid} were outside the comfort zone — ` +
-    `too hot (score over ${low}) or too cold (under ${chillyAt}°C). ` +
-    `So ${validPct ?? 0}% of today was genuinely uncomfortable. The rest was just vibes.`;
 
   // streaks: days since each kind of officially-bad weather
   let lastHot = null, lastCold = null;
