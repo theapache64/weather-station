@@ -373,13 +373,14 @@ function apparentTempC(T, rh) {
   return T + 0.33 * e - 4.0;
 }
 
-// score = how far the feels-like temperature sits above comfort, scaled by
-// temperature_weight from the config sheet. 0 = at or below comfort.
+// discomfort: how far the feels-like temperature sits from comfort (either
+// direction), scaled by temperature_weight. always ≥ 0 — the verdict says
+// whether it's the hot kind or the cold kind
 function calcScore(temp, hum, cfg) {
   const comfortT = parseFloat(cfg["comfort_temperature"]) || 23;
   const wT = parseFloat(cfg["temperature_weight"]) || 4;
   const feels = apparentTempC(temp, hum);
-  return Math.max(0, Math.trunc(wT * (feels - comfortT) * 100) / 100);
+  return Math.abs(Math.trunc(wT * (feels - comfortT) * 100) / 100);
 }
 
 function pickVerdict(score, temp, hum, cfg) {
@@ -402,6 +403,18 @@ function pickVerdict(score, temp, hum, cfg) {
         "Chilly. Cold complaints are valid-ish.",
         "Not freezing. But your fingers disagree." ]),
       sub: `${temp.toFixed(1)}°C — below the “chilly” line of ${chillyAt}°C (comfort is ${comfort}°C).` };
+  }
+
+  // cool side of comfort but not chilly yet — the (positive) score measures cold
+  // discomfort here, so it must not fall through to the heat wording below
+  const feels = apparentTempC(temp, hum);
+  if (feels < comfort) {
+    return { mood: "fine", emoji: pick(["🙂", "🍃", "⛅"]),
+      line: pick([
+        "Comfortably cool. No complaints on file.",
+        "Cool side of perfect. Enjoy it.",
+        "Crisp. The good kind." ]),
+      sub: `Feels like ${feels.toFixed(1)}°C — on the cool side of comfort (${comfort}°C), not chilly yet.` };
   }
 
   if (score < low) {
@@ -463,7 +476,8 @@ function render(rows, cfg) {
   const data = rows
     .map(r => {
       const temp = +r[1], hum = +r[2];
-      return { t: parseTimestamp(r[0]), temp, hum, score: calcScore(temp, hum, cfg) };
+      return { t: parseTimestamp(r[0]), temp, hum,
+               feels: apparentTempC(temp, hum), score: calcScore(temp, hum, cfg) };
     })
     // sanity: drop impossible readings (DHT glitches, test rows) — DHT22 tops out at 80°C
     .filter(r => r.t && !isNaN(r.temp) &&
@@ -477,10 +491,10 @@ function render(rows, cfg) {
 
   const { low: tipLow, high: tipHigh } = thresholds(cfg);
   document.getElementById("card-score").dataset.tip =
-    `How much hotter it FEELS than the comfort temperature — from Steadman's ` +
-    `apparent temperature (air temp + humidity via vapour pressure). ` +
-    `Under ${tipLow}: fine. ${tipLow}–${tipHigh}: warm, debatable. ` +
-    `Over ${tipHigh}: officially hot. (Cold is judged separately, by temperature.)`;
+    `How far it FEELS from the comfort temperature, in either direction — from ` +
+    `Steadman's apparent temperature (air temp + humidity via vapour pressure). ` +
+    `0 = perfect; bigger = worse. The verdict up top says whether it's the hot ` +
+    `kind or the cold kind of bad.`;
 
   const v = pickVerdict(last.score, last.temp, last.hum, cfg);
   document.getElementById("verdict").className = "verdict neu " + (v.mood || "fine");
@@ -572,10 +586,13 @@ function render(rows, cfg) {
   Chart.defaults.font.family = '"Courier New", ui-monospace, monospace';
   Chart.defaults.font.weight = "bold";
 
-  // axis top = highest plotted value + 20 of breathing room, rounded to a clean tick
+  // axis top = highest plotted value + 20 of breathing room, rounded to a clean tick;
+  // bottom dips below 0 only when the (signed) score does — cold shows as a dip
   const allVals = [scores, temps, hums, predScore, predTemp, predHum, yesterdayScores]
     .flat().filter(v => v !== null && !isNaN(v));
   const yMax = Math.ceil((Math.max(...allVals) + 20) / 5) * 5;
+  const rawMin = Math.min(...allVals);
+  const yMin = rawMin < 0 ? Math.floor((rawMin - 5) / 5) * 5 : 0;
 
   const cfgChart = {
     type: "line",
@@ -630,8 +647,8 @@ function render(rows, cfg) {
       },
       scales: {
         x: { ticks: { color: "#111111", maxTicksLimit: 10 }, grid: { display: false } },
-        y: { min: 0, max: yMax, ticks: { color: "#ff4b4b" }, grid: { color: "rgba(17,17,17,0.12)" } },
-        y1: { min: 0, max: yMax, position: "right", ticks: { color: "#111111" }, grid: { display: false } },
+        y: { min: yMin, max: yMax, ticks: { color: "#ff4b4b" }, grid: { color: "rgba(17,17,17,0.12)" } },
+        y1: { min: yMin, max: yMax, position: "right", ticks: { color: "#111111" }, grid: { display: false } },
       },
     },
   };
@@ -726,8 +743,8 @@ function renderHeatmap(data, cfg) {
     const dk = dayKey(d.t);
     if (!dayInfo.has(dk)) dayInfo.set(dk, d.t);
     const k = dk + "|" + d.t.getHours();
-    const c = cells.get(k) || { s: 0, t: 0, n: 0 };
-    c.s += d.score; c.t += d.temp; c.n++;
+    const c = cells.get(k) || { s: 0, t: 0, f: 0, n: 0 };
+    c.s += d.score; c.t += d.temp; c.f += d.feels; c.n++;
     cells.set(k, c);
   }
   const days = [...dayInfo.entries()];
@@ -741,11 +758,14 @@ function renderHeatmap(data, cfg) {
   el.appendChild(head);
 
   // judge each cell by its own hour's day/night thresholds — not "now"'s,
-  // otherwise the map recolors depending on what time you look at it
-  const color = (score, temp, h) => {
-    const { low, high, chillyAt } = thresholds(cfg, h);
-    return temp <= chillyAt ? "#74c0fc"
-      : score >= high ? "var(--red)" : score >= low ? "var(--yellow)" : "#6bcb77";
+  // otherwise the map recolors depending on what time you look at it.
+  // warm colors only apply when the hour actually FELT warmer than comfort —
+  // the score is directionless, so a cold hour could match "score >= low" too
+  const color = (score, temp, feels, h) => {
+    const { low, high, chillyAt, comfort } = thresholds(cfg, h);
+    if (temp <= chillyAt) return "#74c0fc";
+    if (feels < comfort) return "#6bcb77";
+    return score >= high ? "var(--red)" : score >= low ? "var(--yellow)" : "#6bcb77";
   };
 
   hours.forEach(h => {
@@ -755,8 +775,8 @@ function renderHeatmap(data, cfg) {
     for (let i = 0; i < 7; i++) {
       const c = days[i] && cells.get(days[i][0] + "|" + h);
       if (!c) { html += `<div class="hm-cell empty"></div>`; continue; }
-      const avgS = c.s / c.n, avgT = c.t / c.n;
-      html += `<div class="hm-cell" style="background:${color(avgS, avgT, h)}"` +
+      const avgS = c.s / c.n, avgT = c.t / c.n, avgF = c.f / c.n;
+      html += `<div class="hm-cell" style="background:${color(avgS, avgT, avgF, h)}"` +
               ` title="avg score ${avgS.toFixed(1)} · avg temp ${avgT.toFixed(1)}°C"></div>`;
     }
     row.innerHTML = html;
