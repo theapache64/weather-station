@@ -62,14 +62,14 @@
 
   .cards {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 28px;
     max-width: 900px;
     width: 100%;
     margin-bottom: 32px;
   }
   @media (max-width: 760px) {
-    .cards { grid-template-columns: repeat(2, 1fr); }
+    .cards { grid-template-columns: 1fr; }
   }
   .card { padding: 22px 16px; text-align: center; position: relative; cursor: help; }
   .card:hover::after {
