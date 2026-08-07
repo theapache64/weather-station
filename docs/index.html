@@ -106,6 +106,19 @@
     font-size: 1rem; text-transform: uppercase; letter-spacing: 2px;
     margin-bottom: 6px; text-align: center;
   }
+  .range-bar {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+    margin: 10px 0 12px;
+  }
+  .range-bar button {
+    font-family: inherit; font-weight: 700; font-size: 0.75rem;
+    text-transform: uppercase; letter-spacing: 1px;
+    padding: 6px 12px; cursor: pointer;
+    background: #fff; color: var(--ink);
+    border: 3px solid var(--ink); box-shadow: 3px 3px 0 var(--ink);
+  }
+  .range-bar button:active { box-shadow: 1px 1px 0 var(--ink); transform: translate(2px, 2px); }
+  .range-bar button.active { background: var(--yellow); }
   .chart-wrap .hint { font-size: 0.72rem; font-weight: 400; text-align: center; margin-bottom: 16px; }
   .chart-inner { padding: 16px; }
   canvas { width: 100% !important; }
@@ -204,6 +217,13 @@
 
 <div class="chart-wrap neu" id="chartbox" style="display:none">
   <h2>Discomfort history &amp; forecast</h2>
+  <div class="range-bar" id="range-bar" role="group" aria-label="History range">
+    <button type="button" data-days="1" class="active">24 hours</button>
+    <button type="button" data-days="7">7 days</button>
+    <button type="button" data-days="30">30 days</button>
+    <button type="button" data-days="90">90 days</button>
+    <button type="button" data-days="0">All time</button>
+  </div>
   <div class="hint" id="crystal-hint">dashed part = crystal ball 🔮 — what it usually feels like at this hour, averaged over the last 7 days</div>
   <div class="chart-inner neu-inset">
     <canvas id="chart" height="300"></canvas>
@@ -260,10 +280,10 @@ const SHEET_ID = "1nO-hcNX2naH7hCS0WbRd7r907SvisjhD96I8R1Wx1Fs";
 const DATA_URL   = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=514970007&headers=1`;
 const CONFIG_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=awc_config&headers=1`;
 
-const HISTORY_HOURS = 24; // chart shows the last 24h regardless of reading cadence
-
+let rangeDays = 1;
 let chart = null;
-let nextPingAt = null; // when the ESP32 should report in next
+let nextPingAt = null;
+let cachedData = null;
 
 // --- tiny CSV parser (handles quoted fields) ---
 function parseCsv(text) {
@@ -292,6 +312,35 @@ function parseTimestamp(s) {
 
 function fmtTime(date) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function fmtLabel(date, multiDay) {
+  if (!multiDay) return fmtTime(date);
+  return date.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + fmtTime(date);
+}
+
+function rangeLabel(days) {
+  if (days === 0) return "all time";
+  if (days === 1) return "the last 24 hours";
+  return `the last ${days} days`;
+}
+
+function updateRangeBar(spanDays) {
+  const bar = document.getElementById("range-bar");
+  let best = null;
+  bar.querySelectorAll("button[data-days]").forEach(btn => {
+    const days = +btn.dataset.days;
+    const ok = days === 0 || spanDays >= days;
+    btn.hidden = !ok;
+    if (ok) best = btn;
+    btn.classList.toggle("active", ok && days === rangeDays);
+  });
+  const active = bar.querySelector(`button[data-days="${rangeDays}"]:not([hidden])`);
+  if (!active && best) {
+    rangeDays = +best.dataset.days;
+    best.classList.add("active");
+  }
+  bar.style.display = bar.querySelector("button:not([hidden])") ? "" : "none";
 }
 
 // fallback while history is thin: trend of the *recent* readings, with the slope
@@ -519,19 +568,30 @@ function render(rows, cfg) {
   document.getElementById("cards").style.display = "";
   document.getElementById("chartbox").style.display = "";
 
-  // --- chart ---
-  const cutoff = last.t.getTime() - HISTORY_HOURS * 3600 * 1000;
-  const hist = data.filter(d => d.t.getTime() >= cutoff);
+  cachedData = data;
+  renderChart(data);
 
-  // crystal ball stays off until there's a full week of history to predict from;
-  // once on, the forecast tail is ≈ 8% of the window (~2h) so it stays visible
+  return data;
+}
+
+function renderChart(data, force = false) {
+  if (!data?.length) return;
+  const last = data[data.length - 1];
   const spanDays = (last.t.getTime() - data[0].t.getTime()) / 86400000;
+  updateRangeBar(spanDays);
+
+  const multiDay = rangeDays === 0 || rangeDays > 1;
+  const cutoff = rangeDays === 0
+    ? 0
+    : last.t.getTime() - rangeDays * 24 * 3600 * 1000;
+  const hist = data.filter(d => d.t.getTime() >= cutoff);
+  if (!hist.length) return;
   const FORECAST_POINTS = spanDays >= 7 ? Math.max(10, Math.round(hist.length * 0.08)) : 0;
+  const trainLabel = rangeLabel(rangeDays);
   document.getElementById("crystal-hint").textContent = FORECAST_POINTS
-    ? "dashed part = crystal ball 🔮 — what it usually feels like at this hour, averaged over the last 7 days"
+    ? `dashed part = crystal ball 🔮 — what it usually feels like at this hour, averaged over ${trainLabel}`
     : `🔮 crystal ball forecast unlocks after 7 days of data — ${Math.floor(spanDays)}/7 collected`;
 
-  // median interval between readings, used to space forecast points
   const gaps = [];
   for (let i = 1; i < hist.length; i++) gaps.push(hist[i].t - hist[i - 1].t);
   gaps.sort((a, b) => a - b);
@@ -540,19 +600,19 @@ function render(rows, cfg) {
   const futureTimes = Array.from({ length: FORECAST_POINTS },
     (_, i) => new Date(last.t.getTime() + step * (i + 1)));
 
-  // predictions: same-time-of-day average over the last 7 days
-  const weekAgo = last.t.getTime() - 7 * 24 * 3600 * 1000;
-  const week = data.filter(d => d.t.getTime() >= weekAgo);
-  const predScore = forecast(week, "score", futureTimes, 0);
-  const predTemp  = forecast(week, "temp",  futureTimes);
-  const predHum   = forecast(week, "hum",   futureTimes, 0, 100);
+  const train = rangeDays === 0 ? data : data.filter(d => d.t.getTime() >= cutoff);
+  const predScore = forecast(train, "score", futureTimes, 0);
+  const predTemp  = forecast(train, "temp",  futureTimes);
+  const predHum   = forecast(train, "hum",   futureTimes, 0, 100);
 
-  const labels = [...hist.map(d => fmtTime(d.t)), ...futureTimes.map(fmtTime)];
+  const labels = [
+    ...hist.map(d => fmtLabel(d.t, multiDay)),
+    ...futureTimes.map(t => fmtLabel(t, multiDay)),
+  ];
 
-  // yesterday's score at the same time of day, for the whole chart range (history + forecast)
   const DAY = 24 * 3600 * 1000;
   const Y_TOL = 10 * 60 * 1000;
-  let yi = 0; // data is chronological, so walk it once with a moving pointer
+  let yi = 0;
   const yesterdayScores = [...hist.map(d => d.t), ...futureTimes].map(t => {
     const target = t.getTime() - DAY;
     while (yi < data.length && data[yi].t.getTime() < target) yi++;
@@ -582,8 +642,6 @@ function render(rows, cfg) {
   Chart.defaults.font.family = '"Courier New", ui-monospace, monospace';
   Chart.defaults.font.weight = "bold";
 
-  // axis top = highest plotted value + 20 of breathing room, rounded to a clean tick;
-  // bottom dips below 0 only when the (signed) score does — cold shows as a dip
   const allVals = [scores, temps, hums, predScore, predTemp, predHum, yesterdayScores]
     .flat().filter(v => v !== null && !isNaN(v));
   const yMax = Math.ceil((Math.max(...allVals) + 20) / 5) * 5;
@@ -595,7 +653,6 @@ function render(rows, cfg) {
     data: {
       labels,
       datasets: [
-        // score is the star of the show
         line("Discomfort score", histPart(scores), "#ff4b4b", {
           backgroundColor: "rgba(255,75,75,0.15)", fill: true, borderWidth: 4,
         }),
@@ -616,13 +673,13 @@ function render(rows, cfg) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      animation: false, // ~1k points per line — skip the entry animation
+      animation: false,
       interaction: { mode: "index", intersect: false },
       plugins: {
         legend: {
           labels: {
             color: "#111111", usePointStyle: false, boxWidth: 14, boxHeight: 14,
-            filter: item => item.text !== "🔮", // dashed twins share their solid line's legend
+            filter: item => item.text !== "🔮",
           },
         },
         zoom: {
@@ -649,16 +706,18 @@ function render(rows, cfg) {
     },
   };
 
-  if (chart && chart.isZoomedOrPanned && chart.isZoomedOrPanned()) {
-    // user is inspecting a zoomed region — don't yank the chart out from under them
+  if (chart && !force && chart.isZoomedOrPanned && chart.isZoomedOrPanned()) {
   } else if (chart) {
+    if (force) resetZoom();
     chart.data = cfgChart.data;
+    chart.options.scales.y.min = yMin;
+    chart.options.scales.y.max = yMax;
+    chart.options.scales.y1.min = yMin;
+    chart.options.scales.y1.max = yMax;
     chart.update();
   } else {
     chart = new Chart(document.getElementById("chart"), cfgChart);
   }
-
-  return data;
 }
 
 function resetZoom() {
@@ -668,6 +727,17 @@ function resetZoom() {
 document.getElementById("zoom-reset").addEventListener("click", resetZoom);
 document.getElementById("chart").addEventListener("dblclick", resetZoom);
 document.addEventListener("keydown", e => { if (e.key === "Escape") resetZoom(); });
+
+document.getElementById("range-bar").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-days]");
+  if (!btn) return;
+  const days = +btn.dataset.days;
+  if (days === rangeDays) return;
+  rangeDays = days;
+  document.querySelectorAll("#range-bar button").forEach(b =>
+    b.classList.toggle("active", b === btn));
+  renderChart(cachedData, true);
+});
 
 const qDatetime = d =>
   `datetime '${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-` +
