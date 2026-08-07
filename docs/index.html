@@ -183,7 +183,74 @@
     text-transform: uppercase; letter-spacing: 1px;
   }
   .error { background: var(--red); color: #fff; }
+
+  .whats-new-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(17, 17, 17, 0.45);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .whats-new-overlay[hidden] { display: none; }
+  .whats-new {
+    max-width: min(640px, 94vw); width: 100%;
+    max-height: min(88vh, 720px);
+    display: flex; flex-direction: column;
+    background: #fff;
+    padding: 0;
+    overflow: hidden;
+  }
+  .whats-new-head {
+    background: var(--yellow);
+    border-bottom: 3px solid var(--ink);
+    padding: 18px 20px;
+    text-align: center;
+  }
+  .whats-new-head h2 {
+    font-size: 1.1rem; text-transform: uppercase; letter-spacing: 2px;
+  }
+  .whats-new-head .sub {
+    margin-top: 6px; font-size: 0.75rem; font-weight: 400; font-style: italic;
+  }
+  .whats-new-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .wn-entry {
+    border: 3px solid var(--ink);
+    background: var(--gray);
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+  .wn-entry:last-child { margin-bottom: 0; }
+  .wn-date {
+    font-size: 0.7rem; font-weight: 400; letter-spacing: 1px;
+    text-transform: uppercase; margin-bottom: 4px;
+  }
+  .wn-title {
+    font-size: 0.95rem; text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: 8px;
+  }
+  .wn-items {
+    margin: 0; padding-left: 1.1em;
+    font-size: 0.8rem; font-weight: 400; line-height: 1.45;
+  }
+  .wn-items li { margin-bottom: 4px; }
+  .whats-new-foot {
+    border-top: 3px solid var(--ink);
+    padding: 14px 20px;
+    text-align: center;
+  }
+  #whats-new-ok {
+    font-family: inherit; font-weight: 700; font-size: 0.85rem;
+    text-transform: uppercase; letter-spacing: 1px;
+    padding: 10px 22px; cursor: pointer;
+    background: var(--red); color: #fff;
+    border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink);
+  }
+  #whats-new-ok:active { box-shadow: 1px 1px 0 var(--ink); transform: translate(3px, 3px); }
 </style>
+<script src="changelog.js"></script>
 </head>
 <body>
 
@@ -191,6 +258,19 @@
   <h1>⛅ The Weather In Here</h1>
   <p>hot? cold? or is it just you? — the official indoor weather truth machine.</p>
 </header>
+
+<div id="whats-new" class="whats-new-overlay" hidden>
+  <div class="whats-new neu" role="dialog" aria-modal="true" aria-labelledby="whats-new-title">
+    <div class="whats-new-head">
+      <h2 id="whats-new-title">✨ What's New</h2>
+      <div class="sub">stuff that changed since you were last here</div>
+    </div>
+    <div class="whats-new-body" id="whats-new-body"></div>
+    <div class="whats-new-foot">
+      <button type="button" id="whats-new-ok">Got it</button>
+    </div>
+  </div>
+</div>
 
 <div id="status">Consulting the sensor…</div>
 
@@ -921,8 +1001,59 @@ async function countVisit() {
   } catch (e) { /* the counter is decoration — never break the dashboard over it */ }
 }
 
+const CHANGELOG_SEEN_KEY = "changelog-seen-id";
+
+function fmtChangelogDate(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString([], {
+    year: "numeric", month: "short", day: "numeric",
+  });
+}
+
+function unseenChangelog() {
+  if (typeof CHANGELOG === "undefined" || !CHANGELOG.length) return [];
+  if (new URLSearchParams(location.search).has("whatsnew")) return CHANGELOG.slice();
+  const seen = localStorage.getItem(CHANGELOG_SEEN_KEY);
+  if (!seen) return CHANGELOG.slice();
+  const idx = CHANGELOG.findIndex(e => e.id === seen);
+  if (idx <= 0) return idx === 0 ? [] : CHANGELOG.slice();
+  return CHANGELOG.slice(0, idx);
+}
+
+function showWhatsNew(entries) {
+  if (!entries.length) return;
+  const body = document.getElementById("whats-new-body");
+  body.innerHTML = entries.map(e =>
+    `<article class="wn-entry">` +
+      `<div class="wn-date">${fmtChangelogDate(e.date)}</div>` +
+      `<div class="wn-title">${e.title}</div>` +
+      `<ul class="wn-items">${e.items.map(i => `<li>${i}</li>`).join("")}</ul>` +
+    `</article>`
+  ).join("");
+  const overlay = document.getElementById("whats-new");
+  overlay.hidden = false;
+  document.getElementById("whats-new-ok").focus();
+
+  const dismiss = () => {
+    overlay.hidden = true;
+    const force = new URLSearchParams(location.search).has("whatsnew");
+    if (!force && CHANGELOG[0]) {
+      localStorage.setItem(CHANGELOG_SEEN_KEY, CHANGELOG[0].id);
+    }
+    document.getElementById("whats-new-ok").removeEventListener("click", dismiss);
+    overlay.removeEventListener("click", onBg);
+    document.removeEventListener("keydown", onKey);
+  };
+  const onBg = e => { if (e.target === overlay) dismiss(); };
+  const onKey = e => { if (e.key === "Escape") dismiss(); };
+  document.getElementById("whats-new-ok").addEventListener("click", dismiss);
+  overlay.addEventListener("click", onBg);
+  document.addEventListener("keydown", onKey);
+}
+
 refresh();
 countVisit();
+showWhatsNew(unseenChangelog());
 setInterval(refresh, 60000);
 </script>
 </body>
