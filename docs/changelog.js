@@ -1,5 +1,13 @@
 const CHANGELOG = [
   {
+    id: "2026-08-10-no-crystal",
+    date: "2026-08-10",
+    title: "Crystal ball retired",
+    items: [
+      "No more dashed forecast lines pretending to know the future",
+    ],
+  },
+  {
     id: "2026-08-07-whats-new",
     date: "2026-08-07",
     title: "What's New",
