@@ -1,5 +1,13 @@
 const CHANGELOG = [
   {
+    id: "2026-08-18-climate-map-back",
+    date: "2026-08-18",
+    title: "Climate Map was sulking",
+    items: [
+      "Colored hour grid is back — it choked once we had a full week+ of days",
+    ],
+  },
+  {
     id: "2026-08-10-no-crystal",
     date: "2026-08-10",
     title: "Crystal ball retired",

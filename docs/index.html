@@ -304,7 +304,7 @@
     <button type="button" data-days="90">90 days</button>
     <button type="button" data-days="0">All time</button>
   </div>
-  <div class="hint" id="crystal-hint" style="display:none"></div>
+  <div class="hint" id="usual-hint"></div>
   <div class="chart-inner neu-inset">
     <canvas id="chart" height="300"></canvas>
   </div>
@@ -442,8 +442,8 @@ function trend(values, n) {
   return out;
 }
 
-// crystal ball: for each future time, average the readings taken at that same
-// time of day (±20 min) on previous days within the 7-day window
+// usual-for-this-hour: average readings at the same time of day (±20 min)
+// on previous days in the training window
 function forecast(week, key, futureTimes, min = -Infinity, max = Infinity) {
   const TOL = 20 * 60 * 1000;
   const DAY = 24 * 3600 * 1000;
@@ -666,14 +666,15 @@ function renderChart(data, force = false) {
     : last.t.getTime() - rangeDays * 24 * 3600 * 1000;
   const hist = data.filter(d => d.t.getTime() >= cutoff);
   if (!hist.length) return;
-  const FORECAST_POINTS = 0;
+  const USUAL_POINTS = 0;
+  document.getElementById("usual-hint").style.display = "none";
 
   const gaps = [];
   for (let i = 1; i < hist.length; i++) gaps.push(hist[i].t - hist[i - 1].t);
   gaps.sort((a, b) => a - b);
   const step = gaps[Math.floor(gaps.length / 2)] || 60000;
 
-  const futureTimes = Array.from({ length: FORECAST_POINTS },
+  const futureTimes = Array.from({ length: USUAL_POINTS },
     (_, i) => new Date(last.t.getTime() + step * (i + 1)));
 
   const train = rangeDays === 0 ? data : data.filter(d => d.t.getTime() >= cutoff);
@@ -699,7 +700,7 @@ function renderChart(data, force = false) {
   const hasYesterday = yesterdayScores.some(v => v !== null);
 
   const n = hist.length;
-  const histPart = vals => [...vals, ...Array(FORECAST_POINTS).fill(null)];
+  const histPart = vals => [...vals, ...Array(USUAL_POINTS).fill(null)];
   const predPart = (vals, preds) =>
     [...Array(n - 1).fill(null), vals[n - 1], ...preds];
 
@@ -711,7 +712,7 @@ function renderChart(data, force = false) {
     label, data, borderColor: color,
     cubicInterpolationMode: "monotone", tension: 0.4, pointRadius: 0, ...extra,
   });
-  const crystal = (data, color, extra) => line("🔮", data, color, {
+  const usual = (data, color, extra) => line("usual", data, color, {
     borderDash: [6, 6], borderWidth: 2, ...extra,
   });
 
@@ -732,7 +733,7 @@ function renderChart(data, force = false) {
         line("Discomfort score", histPart(scores), "#ff4b4b", {
           backgroundColor: "rgba(255,75,75,0.15)", fill: true, borderWidth: 4,
         }),
-        ...(FORECAST_POINTS ? [crystal(predPart(scores, predScore), "#ff4b4b", {
+        ...(USUAL_POINTS ? [usual(predPart(scores, predScore), "#ff4b4b", {
           backgroundColor: "rgba(255,75,75,0.06)", fill: true, borderWidth: 3,
         })] : []),
         ...(hasYesterday ? [line("Yesterday's score", yesterdayScores, "#8a8a8a", {
@@ -740,9 +741,9 @@ function renderChart(data, force = false) {
         })] : []),
         line("Temperature °C", histPart(temps), "#111111", { borderWidth: 2, yAxisID: "y1" }),
         line("Humidity %", histPart(hums), "#2f6fed", { borderWidth: 2, yAxisID: "y1" }),
-        ...(FORECAST_POINTS ? [
-          crystal(predPart(temps, predTemp), "#111111", { yAxisID: "y1" }),
-          crystal(predPart(hums, predHum), "#2f6fed", { yAxisID: "y1" }),
+        ...(USUAL_POINTS ? [
+          usual(predPart(temps, predTemp), "#111111", { yAxisID: "y1" }),
+          usual(predPart(hums, predHum), "#2f6fed", { yAxisID: "y1" }),
         ] : []),
       ],
     },
@@ -755,7 +756,7 @@ function renderChart(data, force = false) {
         legend: {
           labels: {
             color: "#111111", usePointStyle: false, boxWidth: 14, boxHeight: 14,
-            filter: item => item.text !== "🔮",
+            filter: item => item.text !== "usual",
           },
         },
         zoom: {
@@ -877,14 +878,15 @@ function renderHeatmap(data, cfg) {
     c.s += d.score; c.t += d.temp; c.f += d.feels; c.n++;
     cells.set(k, c);
   }
-  const days = [...dayInfo.entries()];
+  // rolling 7*24h can span 8 calendar days — keep the newest 7 for the grid
+  const days = [...dayInfo.entries()].slice(-7);
   const hours = [...new Set(recent.map(d => d.t.getHours()))].sort((a, b) => a - b);
 
   const head = document.createElement("div");
   head.className = "hm-row";
   head.innerHTML = `<div class="hm-label"></div>` + days.map(([, date]) =>
     `<div class="hm-cell hm-head">${date.toLocaleDateString([], { weekday: "short" })}</div>`
-  ).join("") + `<div class="hm-cell hm-head empty"></div>`.repeat(7 - days.length);
+  ).join("") + `<div class="hm-cell hm-head empty"></div>`.repeat(Math.max(0, 7 - days.length));
   el.appendChild(head);
 
   // judge each cell by its own hour's day/night thresholds — not "now"'s,
