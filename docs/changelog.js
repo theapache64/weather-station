@@ -1,5 +1,13 @@
 const CHANGELOG = [
   {
+    id: "2026-09-28-meme-stickers",
+    date: "2026-09-28",
+    title: "Now with memes",
+    items: [
+      "The verdict comes with a reaction GIF that matches the room's mood",
+    ],
+  },
+  {
     id: "2026-08-18-climate-map-back",
     date: "2026-08-18",
     title: "Climate Map was sulking",

@@ -58,6 +58,17 @@
   .verdict.chilly, .verdict.cold { background: #cfe8ff; }
   .verdict .emoji { font-size: 3rem; display: block; margin-bottom: 10px; }
   .verdict .line { font-size: 1.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  .verdict .sticker {
+    display: block;
+    margin: 16px auto 0;
+    height: 180px;
+    max-width: 100%;
+    object-fit: contain;
+    border: 3px solid var(--ink);
+    box-shadow: 4px 4px 0 var(--ink);
+    background: var(--ink);
+  }
+  .verdict .sticker[hidden] { display: none; }
   .verdict .sub { margin-top: 10px; font-size: 0.85rem; font-weight: 400; }
 
   .cards {
@@ -277,6 +288,7 @@
 <div class="verdict neu" id="verdict" style="display:none">
   <span class="emoji" id="v-emoji">🤔</span>
   <div class="line" id="v-line"></div>
+  <img class="sticker" id="v-sticker" alt="" hidden onerror="this.hidden = true" onload="this.hidden = false">
   <div class="sub" id="v-sub"></div>
 </div>
 
@@ -508,6 +520,14 @@ function calcScore(temp, hum, cfg) {
   return Math.abs(Math.trunc(wT * (feels - comfortT) * 100) / 100);
 }
 
+const STICKERS = {
+  cold: ["s4Bi420mMDRBK", "KaW6fNYZf6eSk", "d3mlmtNPoxNrt4Bi"],
+  chilly: ["oxLsWbH1rvy2A", "xTeV7qibUsOYA3mmYw", "KFUx0Rtz7p0HTzbJ7x"],
+  fine: ["3o7aCWJavAgtBzLWrS", "yJFeycRK2DB4c", "Q81NcsY6YxK7jxnr4v"],
+  warm: ["e7Te7IzEInCMQhpcBt", "QCQZ1wjZFAXM6P5wjL", "snEeOh54kCFxe", "a5viI92PAF89q"],
+  hot: ["NTur7XlVDUdqM", "UZ3XvKxX5ee4g", "5xtDarIN81U0KvlnzKo"],
+};
+
 function pickVerdict(score, temp, hum, cfg) {
   const { low, high, comfort, chillyAt, coldAt } = thresholds(cfg);
   const pick = arr => arr[Math.floor(Math.random() * arr.length)];
@@ -626,6 +646,12 @@ function render(rows, cfg) {
   document.getElementById("v-emoji").textContent = v.emoji;
   document.getElementById("v-line").textContent = v.line;
   document.getElementById("v-sub").textContent = v.sub;
+  const sticker = document.getElementById("v-sticker");
+  if (sticker.dataset.mood !== v.mood) {
+    const ids = STICKERS[v.mood];
+    sticker.dataset.mood = v.mood;
+    sticker.src = `https://media.giphy.com/media/${ids[Math.floor(Math.random() * ids.length)]}/200.webp`;
+  }
 
   // firmware sleeps `sleep_time_in_minutes` between readings (default 30, same as main.cpp),
   // but each cycle also spends ~10s reading the DHT and talking to Google. So predict the
